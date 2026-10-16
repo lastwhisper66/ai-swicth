@@ -1,0 +1,10 @@
+{
+  "[typescript][typescriptreact][javascript][javascriptreact][json][jsonc][css][markdown][yaml]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "editor.formatOnSave": true,
+  "tailwindCSS.experimental.configFile": "src/renderer/src/assets/main.css",
+  "files.associations": {
+    "**/assets/main.css": "tailwindcss"
+  }
+}
