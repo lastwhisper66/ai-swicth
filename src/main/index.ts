@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerAppIpc } from './ipc'
 import icon from '../../resources/icon.png?asset'
+import windowsIcon from '../../resources/icon.ico?asset'
 
 const rendererUrl =
   is.dev && process.env['ELECTRON_RENDERER_URL']
@@ -19,7 +20,7 @@ function createWindow(): void {
     title: 'AI Switch',
     show: false,
     autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
+    icon: process.platform === 'win32' ? windowsIcon : icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -42,6 +43,10 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.lastwhisper.ai-switch')
+
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(icon)
+  }
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
