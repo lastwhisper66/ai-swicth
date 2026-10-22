@@ -1,15 +1,40 @@
 import { app, BrowserWindow } from 'electron'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerAppIpc } from './ipc'
+import { ClaudeCodeAdapter } from './adapters/claude-code'
+import { CodexAdapter } from './adapters/codex'
+import { ProviderStore } from './providers/store'
+import { AppController } from './services/app-controller'
+import { BackupService } from './services/backup'
+import { PathSettingsStore } from './services/path-settings'
+import { SwitchService } from './services/switch'
+import { ToolStatusService } from './services/tool-status'
 import icon from '../../resources/icon.png?asset'
 import windowsIcon from '../../resources/icon.ico?asset'
+
+if (is.dev && process.env.AI_SWITCH_USER_DATA_DIR) {
+  app.setPath('userData', resolve(process.env.AI_SWITCH_USER_DATA_DIR))
+}
 
 const rendererUrl =
   is.dev && process.env['ELECTRON_RENDERER_URL']
     ? new URL(process.env['ELECTRON_RENDERER_URL']).href
     : pathToFileURL(join(__dirname, '../renderer/index.html')).href
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+
+if (!hasSingleInstanceLock) {
+  app.quit()
+}
+
+app.on('second-instance', () => {
+  const mainWindow = BrowserWindow.getAllWindows()[0]
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+})
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -42,6 +67,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  if (!hasSingleInstanceLock) return
   electronApp.setAppUserModelId('com.lastwhisper.ai-switch')
 
   if (process.platform === 'darwin' && app.dock) {
@@ -55,7 +81,25 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  registerAppIpc(rendererUrl)
+  const userDataPath = app.getPath('userData')
+  const providerStore = new ProviderStore(join(userDataPath, 'providers.v1.json'))
+  const pathSettings = new PathSettingsStore(join(userDataPath, 'settings.v1.json'))
+  const backupService = new BackupService(join(userDataPath, 'backups'))
+  const adapters = {
+    'claude-code': new ClaudeCodeAdapter(),
+    codex: new CodexAdapter()
+  }
+  const toolStatusService = new ToolStatusService(providerStore, pathSettings, adapters)
+  const switchService = new SwitchService(providerStore, pathSettings, backupService, adapters)
+  const controller = new AppController(
+    providerStore,
+    pathSettings,
+    backupService,
+    switchService,
+    toolStatusService
+  )
+  const unregisterIpc = registerAppIpc(rendererUrl, controller)
+  app.once('before-quit', unregisterIpc)
 
   createWindow()
 

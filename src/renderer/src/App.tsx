@@ -1,117 +1,404 @@
-import { useEffect, useState } from 'react'
-import { ArrowLeftRight, CircleCheck, LoaderCircle, RefreshCw } from 'lucide-react'
-import type { AppInfo } from '@shared/ipc'
+import { startTransition, useEffect, useState } from 'react'
+import { AlertCircle, ArrowLeftRight, CheckCircle2, LoaderCircle, RefreshCw, X } from 'lucide-react'
+import type { ApiResult, AppSnapshot, ProviderSummary, ToolId } from '@shared/ipc'
+import { ProviderDialog } from '@renderer/components/features/ProviderDialog'
+import { ProvidersPage } from '@renderer/components/features/ProvidersPage'
+import { SettingsBackups } from '@renderer/components/features/SettingsBackups'
+import { ToolSwitchPanel } from '@renderer/components/features/ToolSwitchPanel'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle
-} from '@renderer/components/ui/card'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@renderer/components/ui/tabs'
+import { TooltipProvider } from '@renderer/components/ui/tooltip'
 
-const connectionError = '无法连接本地应用，请点击重试；如果仍然失败，请关闭并重新打开应用。'
+interface Feedback {
+  tone: 'success' | 'warning' | 'error'
+  message: string
+}
+
+type ProviderDialogState = { provider: ProviderSummary | null } | null
+
+const emptySelection: Record<ToolId, string> = {
+  'claude-code': '',
+  codex: ''
+}
 
 function App(): React.JSX.Element {
-  const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null)
+  const [selectedProviders, setSelectedProviders] = useState<Record<ToolId, string>>(emptySelection)
+  const [providerDialog, setProviderDialog] = useState<ProviderDialogState>(null)
+  const [pendingKey, setPendingKey] = useState<string | null>(null)
+  const [feedback, setFeedback] = useState<Feedback | null>(null)
+  const [connectionError, setConnectionError] = useState<string | null>(() =>
+    window.api ? null : '本地桥接未加载，请关闭并重新打开应用。'
+  )
 
   useEffect(() => {
     let active = true
+    const api = window.api
+    if (!api) {
+      return () => {
+        active = false
+      }
+    }
 
-    window.api
-      .getAppInfo()
-      .then((info) => {
-        if (active) setAppInfo(info)
+    api
+      .getSnapshot()
+      .then((result) => {
+        if (!active) return
+        if (result.ok) {
+          startTransition(() => {
+            setSnapshot(result.value)
+            setSelectedProviders({
+              'claude-code': chooseProvider(result.value, 'claude-code', ''),
+              codex: chooseProvider(result.value, 'codex', '')
+            })
+          })
+        } else {
+          setConnectionError(result.error.message)
+        }
       })
       .catch(() => {
-        if (active) setError(connectionError)
+        if (active) setConnectionError('无法连接本地应用，请关闭并重新打开应用。')
       })
-      .finally(() => {
-        if (active) setIsLoading(false)
-      })
-
     return () => {
       active = false
     }
   }, [])
 
-  async function refreshAppInfo(): Promise<void> {
-    setIsLoading(true)
-    setError(null)
+  function adoptSnapshot(nextSnapshot: AppSnapshot): void {
+    startTransition(() => {
+      setSnapshot(nextSnapshot)
+      setSelectedProviders((current) => ({
+        'claude-code': chooseProvider(nextSnapshot, 'claude-code', current['claude-code']),
+        codex: chooseProvider(nextSnapshot, 'codex', current.codex)
+      }))
+      setConnectionError(null)
+    })
+  }
 
+  async function retryConnection(): Promise<void> {
+    setConnectionError(null)
+    if (!window.api) {
+      setConnectionError('本地桥接未加载，请关闭并重新打开应用。')
+      return
+    }
     try {
-      setAppInfo(await window.api.getAppInfo())
+      const result = await window.api.getSnapshot()
+      if (result.ok) adoptSnapshot(result.value)
+      else setConnectionError(result.error.message)
     } catch {
-      setError(connectionError)
-    } finally {
-      setIsLoading(false)
+      setConnectionError('无法连接本地应用，请关闭并重新打开应用。')
     }
   }
 
+  async function refreshSnapshot(): Promise<void> {
+    setPendingKey('refresh')
+    setFeedback(null)
+    try {
+      const result = await window.api.getSnapshot()
+      if (!result.ok) return showError(result.error.message)
+      adoptSnapshot(result.value)
+      showSuccess('工具状态已刷新。')
+    } catch {
+      showError('无法刷新本地状态，请重新打开应用后重试。')
+    } finally {
+      setPendingKey(null)
+    }
+  }
+
+  async function deleteProvider(providerId: string): Promise<void> {
+    await runSnapshotOperation(
+      `delete:${providerId}`,
+      () => window.api.deleteProvider({ id: providerId }),
+      '供应商已删除。'
+    )
+  }
+
+  async function applyProvider(toolId: ToolId, providerId: string): Promise<void> {
+    const key = `apply:${toolId}`
+    setPendingKey(key)
+    setFeedback(null)
+    try {
+      const result = await window.api.applyProvider({ toolId, providerId })
+      if (!result.ok) return showError(result.error.message)
+      adoptSnapshot(result.value.snapshot)
+      const warnings = result.value.operation.warnings
+      const message =
+        warnings.length > 0
+          ? `${result.value.operation.message} ${warnings.join(' ')}`
+          : result.value.operation.message
+      if (warnings.length > 0) showWarning(message)
+      else showSuccess(message)
+    } catch {
+      showError('无法连接本地应用，请重新打开应用后重试。')
+    } finally {
+      setPendingKey(null)
+    }
+  }
+
+  async function savePath(toolId: ToolId, path: string): Promise<void> {
+    await runSnapshotOperation(
+      `path:${toolId}:save`,
+      () => window.api.setToolPath({ toolId, path }),
+      '配置路径已更新。'
+    )
+  }
+
+  async function pickPath(toolId: ToolId): Promise<void> {
+    const key = `path:${toolId}:pick`
+    setPendingKey(key)
+    setFeedback(null)
+    try {
+      const picked = await window.api.pickToolPath({ toolId })
+      if (!picked.ok) return showError(picked.error.message)
+      if (!picked.value) return
+      const saved = await window.api.setToolPath({ toolId, path: picked.value })
+      if (!saved.ok) return showError(saved.error.message)
+      adoptSnapshot(saved.value)
+      showSuccess('配置路径已更新。')
+    } catch {
+      showError('无法打开文件选择器，请重试。')
+    } finally {
+      setPendingKey(null)
+    }
+  }
+
+  async function resetPath(toolId: ToolId): Promise<void> {
+    await runSnapshotOperation(
+      `path:${toolId}:reset`,
+      () => window.api.resetToolPath({ toolId }),
+      '已移除自定义配置路径。'
+    )
+  }
+
+  async function restoreBackup(backupId: string): Promise<void> {
+    const key = `restore:${backupId}`
+    setPendingKey(key)
+    setFeedback(null)
+    try {
+      const result = await window.api.restoreBackup({ backupId })
+      if (!result.ok) return showError(result.error.message)
+      adoptSnapshot(result.value.snapshot)
+      showSuccess(result.value.operation.message)
+    } catch {
+      showError('无法连接本地应用，请重新打开应用后重试。')
+    } finally {
+      setPendingKey(null)
+    }
+  }
+
+  async function runSnapshotOperation(
+    key: string,
+    operation: () => Promise<ApiResult<AppSnapshot>>,
+    successMessage: string
+  ): Promise<void> {
+    setPendingKey(key)
+    setFeedback(null)
+    try {
+      const result = await operation()
+      if (!result.ok) return showError(result.error.message)
+      adoptSnapshot(result.value)
+      showSuccess(successMessage)
+    } catch {
+      showError('无法连接本地应用，请重新打开应用后重试。')
+    } finally {
+      setPendingKey(null)
+    }
+  }
+
+  function showSuccess(message: string): void {
+    setFeedback({ tone: 'success', message })
+  }
+
+  function showError(message: string): void {
+    setFeedback({ tone: 'error', message })
+  }
+
+  function showWarning(message: string): void {
+    setFeedback({ tone: 'warning', message })
+  }
+
+  if (!snapshot) {
+    return (
+      <main className="grid min-h-svh place-items-center px-6">
+        <div className="w-full max-w-sm rounded-xl border bg-card p-6 text-center shadow-sm">
+          {connectionError ? (
+            <AlertCircle className="mx-auto size-6 text-destructive" aria-hidden="true" />
+          ) : (
+            <LoaderCircle className="mx-auto size-6 animate-spin" aria-hidden="true" />
+          )}
+          <p className="mt-3 text-sm">{connectionError ?? '正在读取本地配置…'}</p>
+          {connectionError && (
+            <Button className="mt-4" variant="outline" onClick={() => void retryConnection()}>
+              <RefreshCw aria-hidden="true" />
+              重试
+            </Button>
+          )}
+        </div>
+      </main>
+    )
+  }
+
   return (
-    <main className="mx-auto flex min-h-svh max-w-4xl flex-col px-8 py-12 sm:px-12">
-      <header className="flex items-center gap-3">
-        <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-          <ArrowLeftRight className="size-5" aria-hidden="true" />
-        </div>
-        <h1 className="text-xl font-semibold tracking-tight">AI Switch</h1>
-        <Badge variant="outline" className="ml-auto">
-          本地配置管理
-        </Badge>
-      </header>
-
-      <section className="flex flex-1 flex-col justify-center gap-8 py-12">
-        <div className="space-y-3">
-          <p className="text-sm font-medium text-muted-foreground">Claude Code · Codex</p>
-          <h2 className="text-3xl leading-tight font-semibold tracking-tight sm:text-4xl">
-            统一管理你的 AI 供应商
-          </h2>
-          <p className="max-w-xl text-base leading-7 text-muted-foreground">
-            集中维护 API 信息，为不同工具独立切换供应商。
-          </p>
-        </div>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>欢迎使用 AI Switch</CardTitle>
-            <CardDescription>开发环境已初始化，可以开始构建应用功能。</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2 text-sm" role="status" aria-live="polite">
-              {isLoading ? (
-                <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-              ) : error ? null : (
-                <CircleCheck className="size-4 text-emerald-600" aria-hidden="true" />
-              )}
-              <span className={error ? 'text-destructive' : undefined}>
-                {isLoading ? '正在连接本地应用…' : error || `本地连接正常 · v${appInfo?.version}`}
-              </span>
+    <TooltipProvider>
+      <div className="min-h-svh">
+        <header className="border-b bg-background/95 backdrop-blur">
+          <div className="mx-auto flex max-w-6xl items-center gap-3 px-5 py-4 sm:px-8">
+            <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <ArrowLeftRight className="size-4" aria-hidden="true" />
             </div>
-          </CardContent>
-          <CardFooter className="justify-between gap-4">
-            <span className="text-xs leading-5 text-muted-foreground">
-              供应商管理、配置切换与备份恢复待接入。
-            </span>
+            <div>
+              <h1 className="text-base font-semibold">AI Switch</h1>
+              <p className="text-xs text-muted-foreground">本地供应商配置</p>
+            </div>
             <Button
               type="button"
-              variant="outline"
-              disabled={isLoading}
-              onClick={() => void refreshAppInfo()}
+              variant="ghost"
+              size="icon-sm"
+              className="ml-auto"
+              disabled={pendingKey !== null}
+              onClick={() => void refreshSnapshot()}
+              aria-label="刷新工具状态"
+              title="刷新工具状态"
             >
-              <RefreshCw aria-hidden="true" />
-              {error ? '重试连接' : '刷新连接'}
+              <RefreshCw
+                className={pendingKey === 'refresh' ? 'animate-spin' : undefined}
+                aria-hidden="true"
+              />
             </Button>
-          </CardFooter>
-        </Card>
-      </section>
+            <Badge variant="outline" className="gap-1.5">
+              <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden="true" />v
+              {snapshot.appInfo.version}
+            </Badge>
+          </div>
+        </header>
 
-      <footer className="text-xs text-muted-foreground">AI Switch · 让本地配置更简单</footer>
-    </main>
+        <main className="mx-auto max-w-6xl px-5 py-6 sm:px-8 sm:py-8">
+          {feedback && <FeedbackBanner feedback={feedback} onClose={() => setFeedback(null)} />}
+
+          <Tabs defaultValue="switch" className="gap-6">
+            <TabsList variant="line" className="w-full justify-start border-b pb-2">
+              <TabsTrigger value="switch">工具切换</TabsTrigger>
+              <TabsTrigger value="providers">供应商</TabsTrigger>
+              <TabsTrigger value="settings">设置与备份</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="switch">
+              <div className="mb-5">
+                <h2 className="text-base font-semibold">当前工具配置</h2>
+                <p className="mt-1 text-sm text-muted-foreground">两个工具的配置和备份彼此独立。</p>
+              </div>
+              <div className="grid gap-4 lg:grid-cols-2">
+                {(['claude-code', 'codex'] as const).map((toolId) => (
+                  <ToolSwitchPanel
+                    busy={pendingKey !== null}
+                    key={toolId}
+                    toolId={toolId}
+                    status={snapshot.tools[toolId]}
+                    providers={snapshot.providers}
+                    selectedProviderId={selectedProviders[toolId]}
+                    pending={pendingKey === `apply:${toolId}`}
+                    onSelectedProviderChange={(providerId) =>
+                      setSelectedProviders((current) => ({ ...current, [toolId]: providerId }))
+                    }
+                    onApply={(selectedToolId, providerId) =>
+                      void applyProvider(selectedToolId, providerId)
+                    }
+                  />
+                ))}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="providers">
+              <ProvidersPage
+                busy={pendingKey !== null}
+                providers={snapshot.providers}
+                onAdd={() => setProviderDialog({ provider: null })}
+                onEdit={(provider) => setProviderDialog({ provider })}
+                onDelete={(providerId) => void deleteProvider(providerId)}
+              />
+            </TabsContent>
+
+            <TabsContent value="settings">
+              <SettingsBackups
+                busy={pendingKey !== null}
+                tools={snapshot.tools}
+                backups={snapshot.backups}
+                pendingKey={pendingKey}
+                onSavePath={(toolId, path) => void savePath(toolId, path)}
+                onPickPath={(toolId) => void pickPath(toolId)}
+                onResetPath={(toolId) => void resetPath(toolId)}
+                onRestore={(backupId) => void restoreBackup(backupId)}
+              />
+            </TabsContent>
+          </Tabs>
+        </main>
+
+        {providerDialog && (
+          <ProviderDialog
+            key={providerDialog.provider?.id ?? 'new'}
+            open
+            provider={providerDialog.provider}
+            onOpenChange={(open) => !open && setProviderDialog(null)}
+            onSaved={(nextSnapshot, message) => {
+              adoptSnapshot(nextSnapshot)
+              showSuccess(message)
+            }}
+            onFailure={showError}
+          />
+        )}
+      </div>
+    </TooltipProvider>
   )
+}
+
+function FeedbackBanner({
+  feedback,
+  onClose
+}: {
+  feedback: Feedback
+  onClose: () => void
+}): React.JSX.Element {
+  const success = feedback.tone === 'success'
+  const warning = feedback.tone === 'warning'
+  return (
+    <div
+      className={`mb-5 flex items-start gap-3 rounded-lg border px-3 py-2.5 text-sm ${
+        success
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+          : warning
+            ? 'border-amber-200 bg-amber-50 text-amber-950'
+            : 'border-red-200 bg-red-50 text-red-900'
+      }`}
+      role={feedback.tone === 'error' ? 'alert' : 'status'}
+      aria-live="polite"
+    >
+      {success ? (
+        <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+      ) : (
+        <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+      )}
+      <span className="min-w-0 flex-1 leading-5">{feedback.message}</span>
+      <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="关闭提示">
+        <X aria-hidden="true" />
+      </Button>
+    </div>
+  )
+}
+
+function chooseProvider(snapshot: AppSnapshot, toolId: ToolId, current: string): string {
+  const compatibleProviders = snapshot.providers.filter((provider) =>
+    provider.tools.includes(toolId)
+  )
+  if (compatibleProviders.some((provider) => provider.id === current)) return current
+  const activeProviderId = snapshot.tools[toolId].currentProviderId
+  if (
+    activeProviderId &&
+    compatibleProviders.some((provider) => provider.id === activeProviderId)
+  ) {
+    return activeProviderId
+  }
+  return compatibleProviders[0]?.id ?? ''
 }
 
 export default App

@@ -80,5 +80,17 @@
   body {
     @apply m-0 bg-background font-sans text-foreground antialiased;
     min-width: 360px;
+    background-image:
+      linear-gradient(
+        to right,
+        color-mix(in oklab, var(--border) 32%, transparent) 1px,
+        transparent 1px
+      ),
+      linear-gradient(
+        to bottom,
+        color-mix(in oklab, var(--border) 32%, transparent) 1px,
+        transparent 1px
+      );
+    background-size: 28px 28px;
   }
 }
