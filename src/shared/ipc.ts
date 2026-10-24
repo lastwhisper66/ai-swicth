@@ -7,6 +7,7 @@ export const IPC_CHANNELS = {
   pickToolPath: 'tools:pick-path',
   setToolPath: 'tools:set-path',
   resetToolPath: 'tools:reset-path',
+  openToolLocation: 'tools:open-location',
   getCommonConfig: 'config:get-common',
   saveCommonConfig: 'config:save-common',
   previewConfig: 'config:preview',
@@ -176,6 +177,11 @@ export interface ResetToolPathInput {
   toolId: ToolId
 }
 
+export interface OpenToolLocationInput {
+  toolId: ToolId
+  target: 'directory' | 'config'
+}
+
 export type ApiErrorCode =
   | 'INVALID_INPUT'
   | 'DUPLICATE_PROVIDER'
@@ -186,6 +192,7 @@ export type ApiErrorCode =
   | 'STORAGE_CORRUPTED'
   | 'PATH_NOT_FOUND'
   | 'PARENT_PATH_NOT_FOUND'
+  | 'OPEN_FAILED'
   | 'MALFORMED_CONFIG'
   | 'PERMISSION_DENIED'
   | 'CONCURRENT_MODIFICATION'
@@ -211,6 +218,7 @@ export interface DesktopApi {
   pickToolPath: (input: PickToolPathInput) => Promise<ApiResult<string | null>>
   setToolPath: (input: SetToolPathInput) => Promise<ApiResult<AppSnapshot>>
   resetToolPath: (input: ResetToolPathInput) => Promise<ApiResult<AppSnapshot>>
+  openToolLocation: (input: OpenToolLocationInput) => Promise<ApiResult<void>>
   getCommonConfig: (input: CommonConfigInput) => Promise<ApiResult<CommonConfig>>
   saveCommonConfig: (
     input: SaveCommonConfigInput

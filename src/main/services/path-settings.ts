@@ -33,6 +33,27 @@ export class PathSettingsStore {
     return resolveToolPath(toolId, getDefaultPath(toolId), 'default')
   }
 
+  async getPickerDirectory(toolId: ToolId): Promise<string> {
+    let { directory } = await this.get(toolId)
+    while (true) {
+      try {
+        if ((await stat(directory)).isDirectory()) return directory
+      } catch (error) {
+        if (
+          !(error instanceof Error && 'code' in error) ||
+          (error.code !== 'ENOENT' && error.code !== 'ENOTDIR')
+        ) {
+          throw error
+        }
+      }
+      const parent = dirname(directory)
+      if (parent === directory) {
+        throw new AppError('PATH_NOT_FOUND', '找不到可打开的上级目录，请检查配置路径。')
+      }
+      directory = parent
+    }
+  }
+
   async set(toolId: ToolId, directory: string): Promise<void> {
     const normalizedPath = validateToolPath(directory)
     try {

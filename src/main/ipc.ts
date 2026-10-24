@@ -11,6 +11,7 @@ import {
   type PreviewConfigInput,
   type DeleteProviderInput,
   type PickToolPathInput,
+  type OpenToolLocationInput,
   type ResetToolPathInput,
   type RestoreBackupInput,
   type SetToolPathInput,
@@ -51,8 +52,10 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
     async (input, event) => {
       const window = BrowserWindow.fromWebContents(event.sender)
       if (!window) throw new AppError('INVALID_INPUT', '无法识别应用窗口。')
+      const defaultPath = await controller.getToolPickerDirectory(input)
       const result = await dialog.showOpenDialog(window, {
         title: `选择 ${input.toolId === 'claude-code' ? 'Claude Code' : 'Codex'} 配置目录`,
+        defaultPath,
         properties: ['openDirectory']
       })
       return result.canceled ? null : (result.filePaths[0] ?? null)
@@ -63,6 +66,12 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
   )
   registerBusinessHandler(IPC_CHANNELS.resetToolPath, rendererUrl, parseResetToolPath, (input) =>
     controller.resetToolPath(input)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.openToolLocation,
+    rendererUrl,
+    parseOpenToolLocation,
+    (input) => controller.openToolLocation(input)
   )
   registerBusinessHandler(IPC_CHANNELS.applyProvider, rendererUrl, parseApplyProvider, (input) =>
     controller.applyProvider(input)
@@ -169,6 +178,12 @@ function parseSetToolPath(args: unknown[]): SetToolPathInput {
 function parseResetToolPath(args: unknown[]): ResetToolPathInput {
   const input = expectRecordArgument(args)
   return { toolId: expectToolId(input.toolId) }
+}
+
+function parseOpenToolLocation(args: unknown[]): OpenToolLocationInput {
+  const input = expectRecordArgument(args)
+  if (input.target !== 'directory' && input.target !== 'config') throw invalidRequest()
+  return { toolId: expectToolId(input.toolId), target: input.target }
 }
 
 function parseApplyProvider(args: unknown[]): ApplyProviderInput {

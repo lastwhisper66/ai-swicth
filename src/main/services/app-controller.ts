@@ -11,6 +11,8 @@ import type {
   PreviewConfigInput,
   DeleteProviderInput,
   OperationResponse,
+  OpenToolLocationInput,
+  PickToolPathInput,
   ResetToolPathInput,
   RestoreBackupInput,
   RestoreResult,
@@ -22,6 +24,7 @@ import type { BackupService } from './backup'
 import type { PathSettingsStore } from './path-settings'
 import type { SwitchService } from './switch'
 import type { ToolStatusService } from './tool-status'
+import { openToolLocation } from './tool-location'
 
 export class AppController {
   private mutationLock: Promise<void> = Promise.resolve()
@@ -69,6 +72,10 @@ export class AppController {
     })
   }
 
+  async getToolPickerDirectory(input: PickToolPathInput): Promise<string> {
+    return this.pathSettings.getPickerDirectory(input.toolId)
+  }
+
   async setToolPath(input: SetToolPathInput): Promise<AppSnapshot> {
     return this.withMutation(async () => {
       await this.pathSettings.set(input.toolId, input.path)
@@ -80,6 +87,13 @@ export class AppController {
     return this.withMutation(async () => {
       await this.pathSettings.reset(input.toolId)
       return this.getSnapshot()
+    })
+  }
+
+  async openToolLocation(input: OpenToolLocationInput): Promise<void> {
+    return this.withMutation(async () => {
+      const location = await this.pathSettings.get(input.toolId)
+      await openToolLocation(location, input.target)
     })
   }
 

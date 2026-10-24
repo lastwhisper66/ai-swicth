@@ -1,6 +1,15 @@
 import { useState } from 'react'
-import { FolderOpen, HardDrive, RotateCcw, Save, Undo2 } from 'lucide-react'
-import type { BackupSummary, ToolId, ToolStatus } from '@shared/ipc'
+import {
+  FileText,
+  FolderInput,
+  FolderOpen,
+  HardDrive,
+  Pencil,
+  RotateCcw,
+  Save,
+  Undo2
+} from 'lucide-react'
+import type { BackupSummary, OpenToolLocationInput, ToolId, ToolStatus } from '@shared/ipc'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,6 +43,7 @@ import {
   ItemTitle
 } from '@renderer/components/ui/item'
 import { Spinner } from '@renderer/components/ui/spinner'
+import { ConfigPreview } from './ConfigPreview'
 
 interface SettingsBackupsProps {
   section: 'paths' | 'backups'
@@ -44,6 +54,7 @@ interface SettingsBackupsProps {
   onSavePath: (toolId: ToolId, path: string) => void
   onPickPath: (toolId: ToolId) => void
   onResetPath: (toolId: ToolId) => void
+  onOpenLocation: (input: OpenToolLocationInput) => void
   onRestore: (backupId: string) => void
 }
 
@@ -61,6 +72,7 @@ export function SettingsBackups({
   onSavePath,
   onPickPath,
   onResetPath,
+  onOpenLocation,
   onRestore
 }: SettingsBackupsProps): React.JSX.Element {
   return (
@@ -70,7 +82,7 @@ export function SettingsBackups({
           <div>
             <h2 className="text-base font-semibold">配置路径</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              选择 .claude 或 .codex 配置目录，应用会自动管理其中的配置文件。
+              管理配置目录、查看当前配置，或使用系统默认程序打开文件。
             </p>
           </div>
           <ItemGroup className="gap-0 divide-y overflow-hidden rounded-xl border bg-card">
@@ -79,11 +91,12 @@ export function SettingsBackups({
                 key={`${toolId}:${tools[toolId].directory}`}
                 toolId={toolId}
                 status={tools[toolId]}
-                pending={pendingKey?.startsWith(`path:${toolId}`) ?? false}
+                pending={pendingKey === `path:${toolId}:save`}
                 busy={busy}
                 onSave={onSavePath}
                 onPick={onPickPath}
                 onReset={onResetPath}
+                onOpenLocation={onOpenLocation}
               />
             ))}
           </ItemGroup>
@@ -134,7 +147,8 @@ function ToolPathEditor({
   busy,
   onSave,
   onPick,
-  onReset
+  onReset,
+  onOpenLocation
 }: {
   toolId: ToolId
   status: ToolStatus
@@ -143,15 +157,14 @@ function ToolPathEditor({
   onSave: (toolId: ToolId, path: string) => void
   onPick: (toolId: ToolId) => void
   onReset: (toolId: ToolId) => void
+  onOpenLocation: (input: OpenToolLocationInput) => void
 }): React.JSX.Element {
   const [path, setPath] = useState(status.directory)
+  const [editing, setEditing] = useState(false)
 
   return (
-    <Item
-      role="listitem"
-      className="grid gap-4 rounded-none border-0 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start"
-    >
-      <ItemHeader className="sm:col-span-2">
+    <Item role="listitem" className="grid min-w-0 gap-4 rounded-none border-0 p-4">
+      <ItemHeader>
         <ItemTitle>{toolNames[toolId]}</ItemTitle>
         <Badge variant="outline">
           {status.pathSource === 'custom'
@@ -161,52 +174,149 @@ function ToolPathEditor({
               : '默认路径'}
         </Badge>
       </ItemHeader>
-      <Field className="min-w-0">
-        <FieldLabel htmlFor={`${toolId}-path`}>配置目录</FieldLabel>
-        <Input
-          id={`${toolId}-path`}
-          value={path}
-          onChange={(event) => setPath(event.target.value)}
-          className="font-mono text-xs"
-          disabled={busy}
-          aria-describedby={`${toolId}-path-description`}
+      <div className="grid min-w-0 gap-4 rounded-lg bg-muted/35 p-3">
+        {editing ? (
+          <Field className="min-w-0 gap-2">
+            <FieldLabel htmlFor={`${toolId}-path`}>配置目录</FieldLabel>
+            <Input
+              id={`${toolId}-path`}
+              value={path}
+              onChange={(event) => setPath(event.target.value)}
+              className="font-mono text-xs"
+              disabled={busy}
+              aria-describedby={`${toolId}-path-hint`}
+              autoFocus
+            />
+            <FieldDescription id={`${toolId}-path-hint`}>
+              输入已存在目录的绝对路径，保存后生效。
+            </FieldDescription>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                onClick={() => onSave(toolId, path)}
+                disabled={busy || path === status.directory}
+              >
+                {pending ? <Spinner aria-hidden="true" /> : <Save aria-hidden="true" />}
+                保存路径
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setEditing(false)}
+                disabled={busy}
+              >
+                取消
+              </Button>
+            </div>
+          </Field>
+        ) : (
+          <ConfigLocation
+            label="配置目录"
+            path={status.directory}
+            toolName={toolNames[toolId]}
+            target="directory"
+            busy={busy}
+            onOpen={() => onOpenLocation({ toolId, target: 'directory' })}
+          />
+        )}
+        <ConfigLocation
+          label="配置文件"
+          path={status.path}
+          toolName={toolNames[toolId]}
+          target="config"
+          busy={busy}
+          onOpen={() => onOpenLocation({ toolId, target: 'config' })}
         />
-        <FieldDescription
-          id={`${toolId}-path-description`}
-          className="text-xs leading-5 wrap-anywhere"
-        >
-          {status.statusMessage}
-          <span className="mt-1 block">配置文件：{status.path}</span>
-        </FieldDescription>
-      </Field>
-      <ItemActions className="flex-wrap sm:pt-8">
+      </div>
+      <ItemActions className="flex-wrap">
         <Button
           type="button"
           variant="outline"
-          size="icon"
+          size="sm"
           onClick={() => onPick(toolId)}
           disabled={busy}
-          aria-label="浏览配置目录"
+          aria-label={`选择 ${toolNames[toolId]} 配置目录`}
         >
-          <FolderOpen aria-hidden="true" />
+          <FolderInput aria-hidden="true" />
+          更换目录
         </Button>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => onSave(toolId, path)}
-          disabled={busy || path === status.directory}
-        >
-          {pending ? <Spinner aria-hidden="true" /> : <Save aria-hidden="true" />}
-          保存路径
-        </Button>
+        {!editing && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setPath(status.directory)
+              setEditing(true)
+            }}
+            disabled={busy}
+            aria-label={`手动输入 ${toolNames[toolId]} 配置目录`}
+          >
+            <Pencil aria-hidden="true" />
+            手动输入
+          </Button>
+        )}
         {status.pathSource === 'custom' && (
-          <Button type="button" variant="ghost" onClick={() => onReset(toolId)} disabled={busy}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => onReset(toolId)}
+            disabled={busy}
+          >
             <RotateCcw aria-hidden="true" />
             移除自定义
           </Button>
         )}
       </ItemActions>
+      <div className="min-w-0 space-y-3 border-t pt-3">
+        <p className="text-xs leading-5 wrap-anywhere text-muted-foreground" role="status">
+          {status.statusMessage}
+        </p>
+        <ConfigPreview key={status.path} input={{ toolId }} disabled={busy} />
+      </div>
     </Item>
+  )
+}
+
+function ConfigLocation({
+  label,
+  path,
+  toolName,
+  target,
+  busy,
+  onOpen
+}: {
+  label: string
+  path: string
+  toolName: string
+  target: OpenToolLocationInput['target']
+  busy: boolean
+  onOpen: () => void
+}): React.JSX.Element {
+  const Icon = target === 'directory' ? FolderOpen : FileText
+  return (
+    <div className="flex min-w-0 items-start gap-3">
+      <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <Button
+          type="button"
+          variant="link"
+          className="block h-auto max-w-full rounded-sm p-0 text-left font-mono text-xs font-normal leading-5 break-all whitespace-normal"
+          onClick={onOpen}
+          disabled={busy}
+          title={`打开 ${path}`}
+          aria-label={`打开 ${toolName} ${label}：${path}`}
+        >
+          {path}
+        </Button>
+      </div>
+      <Button type="button" variant="outline" size="sm" onClick={onOpen} disabled={busy}>
+        <Icon aria-hidden="true" />
+        {target === 'directory' ? '打开目录' : '打开文件'}
+      </Button>
+    </div>
   )
 }
 

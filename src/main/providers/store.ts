@@ -176,9 +176,27 @@ export class ProviderStore {
       tools: [...provider.tools],
       models: { ...provider.models },
       hasApiKey: true,
-      maskedApiKey: MASKED_API_KEY,
+      maskedApiKey: this.getMaskedApiKey(provider.encryptedApiKey),
       createdAt: provider.createdAt,
       updatedAt: provider.updatedAt
+    }
+  }
+
+  private getMaskedApiKey(encryptedApiKey: string): string {
+    try {
+      const apiKey = this.decryptApiKey(encryptedApiKey)
+      if (apiKey.length >= 18) return `${apiKey.slice(0, 6)}…${apiKey.slice(-6)}`
+      if (apiKey.length >= 12) return `${apiKey.slice(0, 3)}…${apiKey.slice(-4)}`
+      if (apiKey.length >= 6) return `${apiKey.slice(0, 1)}…${apiKey.slice(-2)}`
+      return MASKED_API_KEY
+    } catch (error) {
+      if (
+        error instanceof AppError &&
+        (error.code === 'STORAGE_CORRUPTED' || error.code === 'SECURE_STORAGE_UNAVAILABLE')
+      ) {
+        return '密钥不可读取'
+      }
+      throw error
     }
   }
 

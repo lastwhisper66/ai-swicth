@@ -21,7 +21,6 @@ import {
   InputGroupInput
 } from '@renderer/components/ui/input-group'
 import { Spinner } from '@renderer/components/ui/spinner'
-import { ConfigPreview } from './ConfigPreview'
 
 interface ProviderFormProps {
   provider: ProviderSummary | null
@@ -98,7 +97,7 @@ export function ProviderForm({
 
       onSaved(
         result.value,
-        `${toolName} 供应商已${provider ? '更新' : '添加'}，可在工具页面选择并应用。`
+        `${toolName} 供应商已${provider ? '更新' : '添加'}，可在工具页面点击“应用”。`
       )
     } catch {
       setFormError('无法连接本地应用，请重新打开应用后重试。')
@@ -194,7 +193,11 @@ export function ProviderForm({
                   label="API Key"
                   error={fieldErrors.apiKey}
                   htmlFor="provider-key"
-                  hint={provider ? '留空可保留已保存的密钥。' : '密钥仅在本机加密保存。'}
+                  hint={
+                    provider
+                      ? `当前密钥：${provider.maskedApiKey}，留空可保留。`
+                      : '密钥仅在本机加密保存。'
+                  }
                 >
                   <InputGroup>
                     <InputGroupInput
@@ -242,31 +245,6 @@ export function ProviderForm({
                 </FormField>
               </FieldGroup>
             </FieldSet>
-
-            <ConfigPreview
-              disabled={pending}
-              input={{
-                toolId,
-                draft: provider
-                  ? {
-                      id: provider.id,
-                      name: form.name,
-                      baseUrl: form.baseUrl,
-                      apiKey: form.apiKey
-                        ? { mode: 'replace', value: form.apiKey }
-                        : { mode: 'keep' },
-                      tools: provider.tools,
-                      models: { ...provider.models, [toolId]: form.model }
-                    }
-                  : {
-                      name: form.name,
-                      baseUrl: form.baseUrl,
-                      apiKey: form.apiKey,
-                      tools: [toolId],
-                      models: { [toolId]: form.model }
-                    }
-              }}
-            />
 
             <div className="flex flex-wrap items-center justify-between gap-4 border-t pt-5">
               <p className="text-xs leading-5 text-muted-foreground">保存后需手动应用到工具。</p>

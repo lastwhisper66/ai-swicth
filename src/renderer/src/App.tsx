@@ -1,7 +1,13 @@
 import { startTransition, useEffect, useState } from 'react'
 import { AlertCircle, ArrowLeftRight, RefreshCw, Settings } from 'lucide-react'
 import { toast } from 'sonner'
-import type { ApiResult, AppSnapshot, ProviderSummary, ToolId } from '@shared/ipc'
+import type {
+  ApiResult,
+  AppSnapshot,
+  OpenToolLocationInput,
+  ProviderSummary,
+  ToolId
+} from '@shared/ipc'
 import { ToolIcon } from '@renderer/components/ToolIcon'
 import { ProviderForm } from '@renderer/components/features/ProviderForm'
 import { SettingsPage, type SettingsSection } from '@renderer/components/features/SettingsPage'
@@ -18,14 +24,8 @@ type MainView = ToolId | 'settings'
 
 const feedbackToastId = 'app-feedback'
 
-const emptySelection: Record<ToolId, string> = {
-  'claude-code': '',
-  codex: ''
-}
-
 function App(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null)
-  const [selectedProviders, setSelectedProviders] = useState<Record<ToolId, string>>(emptySelection)
   const [providerEditor, setProviderEditor] = useState<ProviderEditorState>(null)
   const [settingsTool, setSettingsTool] = useState<ToolId>('claude-code')
   const [view, setView] = useState<MainView>('claude-code')
@@ -51,10 +51,6 @@ function App(): React.JSX.Element {
         if (result.ok) {
           startTransition(() => {
             setSnapshot(result.value)
-            setSelectedProviders({
-              'claude-code': chooseProvider(result.value, 'claude-code', ''),
-              codex: chooseProvider(result.value, 'codex', '')
-            })
           })
         } else {
           setConnectionError(result.error.message)
@@ -71,10 +67,6 @@ function App(): React.JSX.Element {
   function adoptSnapshot(nextSnapshot: AppSnapshot): void {
     startTransition(() => {
       setSnapshot(nextSnapshot)
-      setSelectedProviders((current) => ({
-        'claude-code': chooseProvider(nextSnapshot, 'claude-code', current['claude-code']),
-        codex: chooseProvider(nextSnapshot, 'codex', current.codex)
-      }))
       setConnectionError(null)
     })
   }
@@ -117,7 +109,7 @@ function App(): React.JSX.Element {
   }
 
   async function applyProvider(toolId: ToolId, providerId: string): Promise<void> {
-    const key = `apply:${toolId}`
+    const key = `apply:${toolId}:${providerId}`
     setPendingKey(key)
     try {
       const result = await window.api.applyProvider({ toolId, providerId })
@@ -169,6 +161,18 @@ function App(): React.JSX.Element {
       () => window.api.resetToolPath({ toolId }),
       '已移除自定义配置路径。'
     )
+  }
+
+  async function openToolLocation(input: OpenToolLocationInput): Promise<void> {
+    setPendingKey(`path:${input.toolId}:open:${input.target}`)
+    try {
+      const result = await window.api.openToolLocation(input)
+      if (!result.ok) showError(result.error.message)
+    } catch {
+      showError('无法打开配置位置，请重新打开应用后重试。')
+    } finally {
+      setPendingKey(null)
+    }
   }
 
   async function restoreBackup(backupId: string): Promise<void> {
@@ -355,6 +359,7 @@ function App(): React.JSX.Element {
               onSavePath={(toolId, path) => void savePath(toolId, path)}
               onPickPath={(toolId) => void pickPath(toolId)}
               onResetPath={(toolId) => void resetPath(toolId)}
+              onOpenLocation={(input) => void openToolLocation(input)}
               onRestore={(backupId) => void restoreBackup(backupId)}
               onPendingChange={(pending) => setPendingKey(pending ? 'common:save' : null)}
               onCommonSaved={(nextSnapshot, message) => {
@@ -368,10 +373,10 @@ function App(): React.JSX.Element {
               status={snapshot.tools[view]}
               providers={snapshot.providers}
               busy={pendingKey !== null}
-              pending={pendingKey === `apply:${view}`}
-              selectedProviderId={selectedProviders[view]}
-              onSelectedProviderChange={(providerId) =>
-                setSelectedProviders((current) => ({ ...current, [view]: providerId }))
+              pendingProviderId={
+                pendingKey?.startsWith(`apply:${view}:`)
+                  ? pendingKey.slice(`apply:${view}:`.length)
+                  : null
               }
               onApply={(toolId, providerId) => void applyProvider(toolId, providerId)}
               onAdd={openProviderEditor}
@@ -383,21 +388,6 @@ function App(): React.JSX.Element {
       </div>
     </TooltipProvider>
   )
-}
-
-function chooseProvider(snapshot: AppSnapshot, toolId: ToolId, current: string): string {
-  const compatibleProviders = snapshot.providers.filter((provider) =>
-    provider.tools.includes(toolId)
-  )
-  if (compatibleProviders.some((provider) => provider.id === current)) return current
-  const activeProviderId = snapshot.tools[toolId].currentProviderId
-  if (
-    activeProviderId &&
-    compatibleProviders.some((provider) => provider.id === activeProviderId)
-  ) {
-    return activeProviderId
-  }
-  return compatibleProviders[0]?.id ?? ''
 }
 
 export default App

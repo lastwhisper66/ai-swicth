@@ -1,5 +1,12 @@
 import { Database, FileCog, HardDrive, SlidersHorizontal } from 'lucide-react'
-import type { AppSnapshot, BackupSummary, ProviderSummary, ToolId, ToolStatus } from '@shared/ipc'
+import type {
+  AppSnapshot,
+  BackupSummary,
+  OpenToolLocationInput,
+  ProviderSummary,
+  ToolId,
+  ToolStatus
+} from '@shared/ipc'
 import { Button } from '@renderer/components/ui/button'
 import { ProvidersPage } from './ProvidersPage'
 import { SettingsBackups } from './SettingsBackups'
@@ -24,6 +31,7 @@ interface SettingsPageProps {
   onSavePath: (toolId: ToolId, path: string) => void
   onPickPath: (toolId: ToolId) => void
   onResetPath: (toolId: ToolId) => void
+  onOpenLocation: (input: OpenToolLocationInput) => void
   onRestore: (backupId: string) => void
   onPendingChange: (pending: boolean) => void
   onCommonSaved: (snapshot: AppSnapshot, message: string) => void
@@ -68,6 +76,7 @@ export function SettingsPage({
   onSavePath,
   onPickPath,
   onResetPath,
+  onOpenLocation,
   onRestore,
   onPendingChange,
   onCommonSaved
@@ -107,6 +116,7 @@ export function SettingsPage({
             <ProvidersPage
               busy={busy}
               providers={providers}
+              tools={tools}
               toolId={providerTool}
               onToolChange={onProviderToolChange}
               onAdd={onAddProvider}
@@ -126,6 +136,7 @@ export function SettingsPage({
             onSavePath={onSavePath}
             onPickPath={onPickPath}
             onResetPath={onResetPath}
+            onOpenLocation={onOpenLocation}
             onRestore={onRestore}
           />
         )}
