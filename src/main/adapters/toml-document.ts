@@ -1,4 +1,16 @@
 import { AppError } from '../errors'
+import { parse } from 'smol-toml'
+
+export function validateCodexToml(content: string): Record<string, unknown> {
+  try {
+    return parse(content)
+  } catch {
+    throw new AppError(
+      'MALFORMED_CONFIG',
+      'Codex 配置不是有效的 TOML，请检查语法、重复字段和表定义后重试。'
+    )
+  }
+}
 
 interface TomlHeader {
   name: string
@@ -23,6 +35,7 @@ export interface CodexTomlValues {
   baseUrl: string | null
   apiKey: string | null
   wireApi: string | null
+  requiresOpenaiAuth: boolean | null
 }
 
 export interface CodexTomlUpdate {
@@ -40,24 +53,44 @@ export function readCodexToml(content: string | null): CodexTomlValues {
       modelProvider: null,
       baseUrl: null,
       apiKey: null,
-      wireApi: null
+      wireApi: null,
+      requiresOpenaiAuth: null
     }
   }
+
+  const root = validateCodexToml(content)
 
   const lines = scanTomlLines(splitLines(content))
   const model = readStringFromSection(lines, null, 'model')
   const modelProvider = readStringFromSection(lines, null, 'model_provider')
   if (!modelProvider) {
-    return { model, modelProvider, baseUrl: null, apiKey: null, wireApi: null }
+    return {
+      model,
+      modelProvider,
+      baseUrl: null,
+      apiKey: null,
+      wireApi: null,
+      requiresOpenaiAuth: null
+    }
   }
 
   const sectionName = `model_providers.${modelProvider}`
+  const providers = root.model_providers
+  const provider =
+    providers && typeof providers === 'object'
+      ? (providers as Record<string, unknown>)[modelProvider]
+      : null
+  const requiresOpenaiAuth =
+    provider && typeof provider === 'object' && 'requires_openai_auth' in provider
+      ? provider.requires_openai_auth
+      : null
   return {
     model,
     modelProvider,
     baseUrl: readStringFromSection(lines, sectionName, 'base_url'),
     apiKey: readStringFromSection(lines, sectionName, 'experimental_bearer_token'),
-    wireApi: readStringFromSection(lines, sectionName, 'wire_api')
+    wireApi: readStringFromSection(lines, sectionName, 'wire_api'),
+    requiresOpenaiAuth: typeof requiresOpenaiAuth === 'boolean' ? requiresOpenaiAuth : null
   }
 }
 
@@ -107,7 +140,8 @@ export function updateCodexToml(content: string | null, update: CodexTomlUpdate)
     `name = ${encodeTomlString(update.providerName)}`,
     `base_url = ${encodeTomlString(update.baseUrl)}`,
     'wire_api = "responses"',
-    `experimental_bearer_token = ${encodeTomlString(update.apiKey)}`
+    `experimental_bearer_token = ${encodeTomlString(update.apiKey)}`,
+    'requires_openai_auth = false'
   )
 
   return `${result.join(newline)}${newline}`

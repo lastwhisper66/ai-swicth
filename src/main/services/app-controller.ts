@@ -4,6 +4,11 @@ import type {
   ApplyProviderInput,
   ApplyResult,
   CreateProviderInput,
+  CommonConfigInput,
+  CommonConfig,
+  ConfigPreview,
+  SaveCommonConfigInput,
+  PreviewConfigInput,
   DeleteProviderInput,
   OperationResponse,
   ResetToolPathInput,
@@ -88,6 +93,21 @@ export class AppController {
   async restoreBackup(input: RestoreBackupInput): Promise<OperationResponse<RestoreResult>> {
     return this.withMutation(async () => {
       const operation = await this.switchService.restore(input.backupId)
+      return { operation, snapshot: await this.getSnapshot() }
+    })
+  }
+
+  async getCommonConfig(input: CommonConfigInput): Promise<CommonConfig> {
+    return this.withMutation(() => this.switchService.getCommonConfig(input))
+  }
+
+  async previewConfig(input: PreviewConfigInput): Promise<ConfigPreview> {
+    return this.withMutation(() => this.switchService.previewConfig(input))
+  }
+
+  async saveCommonConfig(input: SaveCommonConfigInput): Promise<OperationResponse<ApplyResult>> {
+    return this.withMutation(async () => {
+      const operation = await this.switchService.saveCommonConfig(input)
       return { operation, snapshot: await this.getSnapshot() }
     })
   }

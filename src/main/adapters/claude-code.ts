@@ -12,6 +12,50 @@ export class ClaudeCodeAdapter implements ToolAdapter {
   readonly toolId = 'claude-code' as const
   readonly displayName = 'Claude Code'
 
+  extractCommon(content: string | null): string {
+    const root = content === null ? {} : parseJsonObject(content)
+    delete root.model
+    if (isJsonObject(root.env)) {
+      for (const key of Object.keys(root.env)) {
+        if (isProviderEnvironmentKey(key)) delete root.env[key]
+      }
+      if (Object.keys(root.env).length === 0) delete root.env
+    }
+    return `${JSON.stringify(root, null, 2)}\n`
+  }
+
+  validateCommon(content: string): void {
+    const root = parseJsonObject(content)
+    if ('env' in root && !isJsonObject(root.env)) {
+      throw new AppError('INVALID_INPUT', '共通配置中的 env 必须是 JSON 对象。')
+    }
+    if (
+      'model' in root ||
+      (isJsonObject(root.env) && Object.keys(root.env).some(isProviderEnvironmentKey))
+    ) {
+      throw new AppError(
+        'INVALID_INPUT',
+        '共通配置不能包含 model 或 env 中的供应商地址、密钥、模型字段，请在供应商中设置。'
+      )
+    }
+  }
+
+  applyCommon(content: string | null, commonContent: string): string {
+    this.validateCommon(commonContent)
+    const root = parseJsonObject(commonContent)
+    const current = content === null ? {} : parseJsonObject(content)
+    if ('model' in current) root.model = current.model
+    const providerEnvironment = Object.fromEntries(
+      Object.entries(isJsonObject(current.env) ? current.env : {}).filter(([key]) =>
+        isProviderEnvironmentKey(key)
+      )
+    )
+    if (Object.keys(providerEnvironment).length > 0) {
+      root.env = { ...(isJsonObject(root.env) ? root.env : {}), ...providerEnvironment }
+    }
+    return `${JSON.stringify(root, null, detectIndentation(content))}\n`
+  }
+
   parseCurrent(content: string | null): CurrentToolConfiguration {
     if (content === null) return { baseUrl: null, model: null, apiKey: null }
     const root = parseJsonObject(content)
@@ -90,4 +134,11 @@ function readOptionalString(value: unknown): string | null {
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isProviderEnvironmentKey(key: string): boolean {
+  return (
+    /^ANTHROPIC_.*(?:API_KEY|AUTH_TOKEN|BASE_URL|MODEL)/u.test(key) ||
+    key === 'CLAUDE_CODE_SUBAGENT_MODEL'
+  )
 }

@@ -8,6 +8,7 @@ import { CodexAdapter } from './adapters/codex'
 import { ProviderStore } from './providers/store'
 import { AppController } from './services/app-controller'
 import { BackupService } from './services/backup'
+import { CommonConfigStore } from './services/common-config'
 import { PathSettingsStore } from './services/path-settings'
 import { SwitchService } from './services/switch'
 import { ToolStatusService } from './services/tool-status'
@@ -84,13 +85,20 @@ app.whenReady().then(() => {
   const userDataPath = app.getPath('userData')
   const providerStore = new ProviderStore(join(userDataPath, 'providers.v1.json'))
   const pathSettings = new PathSettingsStore(join(userDataPath, 'settings.v1.json'))
-  const backupService = new BackupService(join(userDataPath, 'backups'))
+  const commonConfigs = new CommonConfigStore(userDataPath)
+  const backupService = new BackupService(join(userDataPath, 'backups'), commonConfigs)
   const adapters = {
     'claude-code': new ClaudeCodeAdapter(),
     codex: new CodexAdapter()
   }
   const toolStatusService = new ToolStatusService(providerStore, pathSettings, adapters)
-  const switchService = new SwitchService(providerStore, pathSettings, backupService, adapters)
+  const switchService = new SwitchService(
+    providerStore,
+    pathSettings,
+    backupService,
+    adapters,
+    commonConfigs
+  )
   const controller = new AppController(
     providerStore,
     pathSettings,

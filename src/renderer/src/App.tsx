@@ -1,21 +1,22 @@
 import { startTransition, useEffect, useState } from 'react'
-import { AlertCircle, ArrowLeftRight, CheckCircle2, LoaderCircle, RefreshCw, X } from 'lucide-react'
+import { AlertCircle, ArrowLeftRight, RefreshCw, Settings } from 'lucide-react'
+import { toast } from 'sonner'
 import type { ApiResult, AppSnapshot, ProviderSummary, ToolId } from '@shared/ipc'
-import { ProviderDialog } from '@renderer/components/features/ProviderDialog'
-import { ProvidersPage } from '@renderer/components/features/ProvidersPage'
-import { SettingsBackups } from '@renderer/components/features/SettingsBackups'
-import { ToolSwitchPanel } from '@renderer/components/features/ToolSwitchPanel'
+import { ToolIcon } from '@renderer/components/ToolIcon'
+import { ProviderForm } from '@renderer/components/features/ProviderForm'
+import { SettingsPage, type SettingsSection } from '@renderer/components/features/SettingsPage'
+import { ToolConfigPage } from '@renderer/components/features/ToolConfigPage'
+import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@renderer/components/ui/tabs'
+import { Card, CardContent } from '@renderer/components/ui/card'
+import { Spinner } from '@renderer/components/ui/spinner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 
-interface Feedback {
-  tone: 'success' | 'warning' | 'error'
-  message: string
-}
+type ProviderEditorState = { provider: ProviderSummary | null; toolId: ToolId } | null
+type MainView = ToolId | 'settings'
 
-type ProviderDialogState = { provider: ProviderSummary | null } | null
+const feedbackToastId = 'app-feedback'
 
 const emptySelection: Record<ToolId, string> = {
   'claude-code': '',
@@ -25,9 +26,11 @@ const emptySelection: Record<ToolId, string> = {
 function App(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null)
   const [selectedProviders, setSelectedProviders] = useState<Record<ToolId, string>>(emptySelection)
-  const [providerDialog, setProviderDialog] = useState<ProviderDialogState>(null)
+  const [providerEditor, setProviderEditor] = useState<ProviderEditorState>(null)
+  const [settingsTool, setSettingsTool] = useState<ToolId>('claude-code')
+  const [view, setView] = useState<MainView>('claude-code')
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('providers')
   const [pendingKey, setPendingKey] = useState<string | null>(null)
-  const [feedback, setFeedback] = useState<Feedback | null>(null)
   const [connectionError, setConnectionError] = useState<string | null>(() =>
     window.api ? null : '本地桥接未加载，请关闭并重新打开应用。'
   )
@@ -93,7 +96,6 @@ function App(): React.JSX.Element {
 
   async function refreshSnapshot(): Promise<void> {
     setPendingKey('refresh')
-    setFeedback(null)
     try {
       const result = await window.api.getSnapshot()
       if (!result.ok) return showError(result.error.message)
@@ -117,7 +119,6 @@ function App(): React.JSX.Element {
   async function applyProvider(toolId: ToolId, providerId: string): Promise<void> {
     const key = `apply:${toolId}`
     setPendingKey(key)
-    setFeedback(null)
     try {
       const result = await window.api.applyProvider({ toolId, providerId })
       if (!result.ok) return showError(result.error.message)
@@ -147,7 +148,6 @@ function App(): React.JSX.Element {
   async function pickPath(toolId: ToolId): Promise<void> {
     const key = `path:${toolId}:pick`
     setPendingKey(key)
-    setFeedback(null)
     try {
       const picked = await window.api.pickToolPath({ toolId })
       if (!picked.ok) return showError(picked.error.message)
@@ -157,7 +157,7 @@ function App(): React.JSX.Element {
       adoptSnapshot(saved.value)
       showSuccess('配置路径已更新。')
     } catch {
-      showError('无法打开文件选择器，请重试。')
+      showError('无法打开目录选择器，请重试。')
     } finally {
       setPendingKey(null)
     }
@@ -174,7 +174,6 @@ function App(): React.JSX.Element {
   async function restoreBackup(backupId: string): Promise<void> {
     const key = `restore:${backupId}`
     setPendingKey(key)
-    setFeedback(null)
     try {
       const result = await window.api.restoreBackup({ backupId })
       if (!result.ok) return showError(result.error.message)
@@ -193,7 +192,6 @@ function App(): React.JSX.Element {
     successMessage: string
   ): Promise<void> {
     setPendingKey(key)
-    setFeedback(null)
     try {
       const result = await operation()
       if (!result.ok) return showError(result.error.message)
@@ -207,34 +205,48 @@ function App(): React.JSX.Element {
   }
 
   function showSuccess(message: string): void {
-    setFeedback({ tone: 'success', message })
+    toast.success(message, { id: feedbackToastId, duration: 4000 })
   }
 
   function showError(message: string): void {
-    setFeedback({ tone: 'error', message })
+    toast.error(message, { id: feedbackToastId, duration: 8000 })
   }
 
   function showWarning(message: string): void {
-    setFeedback({ tone: 'warning', message })
+    toast.warning(message, { id: feedbackToastId, duration: 8000 })
+  }
+
+  function openProviderEditor(toolId: ToolId, provider: ProviderSummary | null = null): void {
+    setView('settings')
+    setSettingsSection('providers')
+    setSettingsTool(toolId)
+    setProviderEditor({ provider, toolId })
   }
 
   if (!snapshot) {
     return (
       <main className="grid min-h-svh place-items-center px-6">
-        <div className="w-full max-w-sm rounded-xl border bg-card p-6 text-center shadow-sm">
-          {connectionError ? (
-            <AlertCircle className="mx-auto size-6 text-destructive" aria-hidden="true" />
-          ) : (
-            <LoaderCircle className="mx-auto size-6 animate-spin" aria-hidden="true" />
-          )}
-          <p className="mt-3 text-sm">{connectionError ?? '正在读取本地配置…'}</p>
-          {connectionError && (
-            <Button className="mt-4" variant="outline" onClick={() => void retryConnection()}>
-              <RefreshCw aria-hidden="true" />
-              重试
-            </Button>
-          )}
-        </div>
+        <Card className="w-full max-w-sm py-0 text-center">
+          <CardContent className="p-6">
+            {connectionError ? (
+              <Alert variant="destructive">
+                <AlertCircle aria-hidden="true" />
+                <AlertDescription>{connectionError}</AlertDescription>
+              </Alert>
+            ) : (
+              <>
+                <Spinner className="mx-auto size-6" aria-label="正在读取本地配置" />
+                <p className="mt-3 text-sm">正在读取本地配置…</p>
+              </>
+            )}
+            {connectionError && (
+              <Button className="mt-4" variant="outline" onClick={() => void retryConnection()}>
+                <RefreshCw aria-hidden="true" />
+                重试
+              </Button>
+            )}
+          </CardContent>
+        </Card>
       </main>
     )
   }
@@ -243,7 +255,7 @@ function App(): React.JSX.Element {
     <TooltipProvider>
       <div className="min-h-svh">
         <header className="border-b bg-background/95 backdrop-blur">
-          <div className="mx-auto flex max-w-6xl items-center gap-3 px-5 py-4 sm:px-8">
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-5 py-4 sm:px-8">
             <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <ArrowLeftRight className="size-4" aria-hidden="true" />
             </div>
@@ -251,6 +263,31 @@ function App(): React.JSX.Element {
               <h1 className="text-base font-semibold">AI Switch</h1>
               <p className="text-xs text-muted-foreground">本地供应商配置</p>
             </div>
+            <nav
+              className="order-3 flex w-full gap-1 border-t pt-3 sm:order-none sm:ml-6 sm:w-auto sm:border-t-0 sm:pt-0"
+              aria-label="工具页面"
+            >
+              <Button
+                type="button"
+                variant={view === 'claude-code' ? 'secondary' : 'ghost'}
+                size="sm"
+                disabled={pendingKey !== null}
+                onClick={() => setView('claude-code')}
+              >
+                <ToolIcon toolId="claude-code" />
+                Claude Code
+              </Button>
+              <Button
+                type="button"
+                variant={view === 'codex' ? 'secondary' : 'ghost'}
+                size="sm"
+                disabled={pendingKey !== null}
+                onClick={() => setView('codex')}
+              >
+                <ToolIcon toolId="codex" />
+                Codex
+              </Button>
+            </nav>
             <Button
               type="button"
               variant="ghost"
@@ -266,6 +303,17 @@ function App(): React.JSX.Element {
                 aria-hidden="true"
               />
             </Button>
+            <Button
+              type="button"
+              variant={view === 'settings' ? 'secondary' : 'ghost'}
+              size="icon-sm"
+              disabled={pendingKey !== null}
+              onClick={() => setView('settings')}
+              aria-label="打开设置"
+              title="设置"
+            >
+              <Settings aria-hidden="true" />
+            </Button>
             <Badge variant="outline" className="gap-1.5">
               <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden="true" />v
               {snapshot.appInfo.version}
@@ -274,115 +322,66 @@ function App(): React.JSX.Element {
         </header>
 
         <main className="mx-auto max-w-6xl px-5 py-6 sm:px-8 sm:py-8">
-          {feedback && <FeedbackBanner feedback={feedback} onClose={() => setFeedback(null)} />}
-
-          <Tabs defaultValue="switch" className="gap-6">
-            <TabsList variant="line" className="w-full justify-start border-b pb-2">
-              <TabsTrigger value="switch">工具切换</TabsTrigger>
-              <TabsTrigger value="providers">供应商</TabsTrigger>
-              <TabsTrigger value="settings">设置与备份</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="switch">
-              <div className="mb-5">
-                <h2 className="text-base font-semibold">当前工具配置</h2>
-                <p className="mt-1 text-sm text-muted-foreground">两个工具的配置和备份彼此独立。</p>
-              </div>
-              <div className="grid gap-4 lg:grid-cols-2">
-                {(['claude-code', 'codex'] as const).map((toolId) => (
-                  <ToolSwitchPanel
-                    busy={pendingKey !== null}
-                    key={toolId}
-                    toolId={toolId}
-                    status={snapshot.tools[toolId]}
-                    providers={snapshot.providers}
-                    selectedProviderId={selectedProviders[toolId]}
-                    pending={pendingKey === `apply:${toolId}`}
-                    onSelectedProviderChange={(providerId) =>
-                      setSelectedProviders((current) => ({ ...current, [toolId]: providerId }))
-                    }
-                    onApply={(selectedToolId, providerId) =>
-                      void applyProvider(selectedToolId, providerId)
-                    }
+          {view === 'settings' ? (
+            <SettingsPage
+              section={settingsSection}
+              onSectionChange={setSettingsSection}
+              providers={snapshot.providers}
+              tools={snapshot.tools}
+              backups={snapshot.backups}
+              pendingKey={pendingKey}
+              busy={pendingKey !== null}
+              providerTool={settingsTool}
+              onProviderToolChange={setSettingsTool}
+              providerEditor={
+                providerEditor && (
+                  <ProviderForm
+                    key={`${providerEditor.toolId}:${providerEditor.provider?.id ?? 'new'}`}
+                    provider={providerEditor.provider}
+                    toolId={providerEditor.toolId}
+                    onCancel={() => setProviderEditor(null)}
+                    onPendingChange={(pending) => setPendingKey(pending ? 'provider:save' : null)}
+                    onSaved={(nextSnapshot, message) => {
+                      adoptSnapshot(nextSnapshot)
+                      setProviderEditor(null)
+                      showSuccess(message)
+                    }}
                   />
-                ))}
-              </div>
-            </TabsContent>
-
-            <TabsContent value="providers">
-              <ProvidersPage
-                busy={pendingKey !== null}
-                providers={snapshot.providers}
-                onAdd={() => setProviderDialog({ provider: null })}
-                onEdit={(provider) => setProviderDialog({ provider })}
-                onDelete={(providerId) => void deleteProvider(providerId)}
-              />
-            </TabsContent>
-
-            <TabsContent value="settings">
-              <SettingsBackups
-                busy={pendingKey !== null}
-                tools={snapshot.tools}
-                backups={snapshot.backups}
-                pendingKey={pendingKey}
-                onSavePath={(toolId, path) => void savePath(toolId, path)}
-                onPickPath={(toolId) => void pickPath(toolId)}
-                onResetPath={(toolId) => void resetPath(toolId)}
-                onRestore={(backupId) => void restoreBackup(backupId)}
-              />
-            </TabsContent>
-          </Tabs>
+                )
+              }
+              onAddProvider={openProviderEditor}
+              onEditProvider={(provider, toolId) => openProviderEditor(toolId, provider)}
+              onDeleteProvider={(providerId) => void deleteProvider(providerId)}
+              onSavePath={(toolId, path) => void savePath(toolId, path)}
+              onPickPath={(toolId) => void pickPath(toolId)}
+              onResetPath={(toolId) => void resetPath(toolId)}
+              onRestore={(backupId) => void restoreBackup(backupId)}
+              onPendingChange={(pending) => setPendingKey(pending ? 'common:save' : null)}
+              onCommonSaved={(nextSnapshot, message) => {
+                adoptSnapshot(nextSnapshot)
+                showSuccess(message)
+              }}
+            />
+          ) : (
+            <ToolConfigPage
+              toolId={view}
+              status={snapshot.tools[view]}
+              providers={snapshot.providers}
+              busy={pendingKey !== null}
+              pending={pendingKey === `apply:${view}`}
+              selectedProviderId={selectedProviders[view]}
+              onSelectedProviderChange={(providerId) =>
+                setSelectedProviders((current) => ({ ...current, [view]: providerId }))
+              }
+              onApply={(toolId, providerId) => void applyProvider(toolId, providerId)}
+              onAdd={openProviderEditor}
+              onEdit={(provider) => openProviderEditor(view, provider)}
+              onDelete={(providerId) => void deleteProvider(providerId)}
+            />
+          )}
         </main>
-
-        {providerDialog && (
-          <ProviderDialog
-            key={providerDialog.provider?.id ?? 'new'}
-            open
-            provider={providerDialog.provider}
-            onOpenChange={(open) => !open && setProviderDialog(null)}
-            onSaved={(nextSnapshot, message) => {
-              adoptSnapshot(nextSnapshot)
-              showSuccess(message)
-            }}
-            onFailure={showError}
-          />
-        )}
       </div>
     </TooltipProvider>
-  )
-}
-
-function FeedbackBanner({
-  feedback,
-  onClose
-}: {
-  feedback: Feedback
-  onClose: () => void
-}): React.JSX.Element {
-  const success = feedback.tone === 'success'
-  const warning = feedback.tone === 'warning'
-  return (
-    <div
-      className={`mb-5 flex items-start gap-3 rounded-lg border px-3 py-2.5 text-sm ${
-        success
-          ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-          : warning
-            ? 'border-amber-200 bg-amber-50 text-amber-950'
-            : 'border-red-200 bg-red-50 text-red-900'
-      }`}
-      role={feedback.tone === 'error' ? 'alert' : 'status'}
-      aria-live="polite"
-    >
-      {success ? (
-        <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-      ) : (
-        <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-      )}
-      <span className="min-w-0 flex-1 leading-5">{feedback.message}</span>
-      <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="关闭提示">
-        <X aria-hidden="true" />
-      </Button>
-    </div>
   )
 }
 

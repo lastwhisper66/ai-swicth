@@ -7,6 +7,9 @@ export const IPC_CHANNELS = {
   pickToolPath: 'tools:pick-path',
   setToolPath: 'tools:set-path',
   resetToolPath: 'tools:reset-path',
+  getCommonConfig: 'config:get-common',
+  saveCommonConfig: 'config:save-common',
+  previewConfig: 'config:preview',
   applyProvider: 'switch:apply',
   restoreBackup: 'backups:restore'
 } as const
@@ -68,6 +71,7 @@ export type ToolFileState = 'ready' | 'missing' | 'invalid' | 'unreadable'
 export interface ToolStatus {
   toolId: ToolId
   path: string
+  directory: string
   pathSource: ToolPathSource
   fileState: ToolFileState
   statusMessage: string
@@ -78,7 +82,37 @@ export interface ToolStatus {
   model: string | null
 }
 
-export type BackupReason = 'apply' | 'restore'
+export type BackupReason = 'apply' | 'restore' | 'common'
+
+export interface CommonConfigInput {
+  toolId: ToolId
+  fromCurrent?: boolean
+}
+
+export interface CommonConfig {
+  toolId: ToolId
+  content: string
+  templatePath: string
+  source: 'saved' | 'current'
+  revision: string
+}
+
+export interface SaveCommonConfigInput {
+  toolId: ToolId
+  content: string
+  revision: string
+}
+
+export interface PreviewConfigInput {
+  toolId: ToolId
+  providerId?: string
+  draft?: CreateProviderInput | UpdateProviderInput
+}
+
+export interface ConfigPreview {
+  mode: 'current' | 'provider'
+  files: Array<{ path: string; content: string | null; language: 'json' | 'toml' }>
+}
 
 export interface BackupSummary {
   id: string
@@ -89,6 +123,7 @@ export interface BackupSummary {
   providerName: string | null
   reason: BackupReason
   originalFileExisted: boolean
+  relatedPaths: string[]
 }
 
 export interface AppSnapshot {
@@ -176,6 +211,11 @@ export interface DesktopApi {
   pickToolPath: (input: PickToolPathInput) => Promise<ApiResult<string | null>>
   setToolPath: (input: SetToolPathInput) => Promise<ApiResult<AppSnapshot>>
   resetToolPath: (input: ResetToolPathInput) => Promise<ApiResult<AppSnapshot>>
+  getCommonConfig: (input: CommonConfigInput) => Promise<ApiResult<CommonConfig>>
+  saveCommonConfig: (
+    input: SaveCommonConfigInput
+  ) => Promise<ApiResult<OperationResponse<ApplyResult>>>
+  previewConfig: (input: PreviewConfigInput) => Promise<ApiResult<ConfigPreview>>
   applyProvider: (input: ApplyProviderInput) => Promise<ApiResult<OperationResponse<ApplyResult>>>
   restoreBackup: (input: RestoreBackupInput) => Promise<ApiResult<OperationResponse<RestoreResult>>>
 }

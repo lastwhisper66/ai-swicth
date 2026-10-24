@@ -10,11 +10,19 @@ import {
   encryptSecret
 } from '../security/secure-storage'
 import { hashContent, readOptionalText, writeTextAtomic } from '../utils/files'
+import type { CommonConfigStore } from './common-config'
 
 const BACKUP_VERSION = 1
 const MAX_BACKUPS_PER_TOOL = 20
 
 interface BackupRecord extends BackupSummary {
+  checksum: string
+  additionalFiles?: BackupFileRecord[]
+}
+
+interface BackupFileRecord {
+  path: string
+  originalFileExisted: boolean
   checksum: string
 }
 
@@ -26,12 +34,14 @@ interface BackupIndexDocument {
 export interface BackupPayload {
   record: BackupRecord
   content: string | null
+  additionalContents: Record<string, string | null>
 }
 
 export interface CreateBackupInput {
   toolId: ToolId
   targetPath: string
   content: string | null
+  additionalFiles?: Array<{ path: string; content: string | null }>
   reason: BackupReason
   providerId: string | null
   providerName: string | null
@@ -41,19 +51,29 @@ export interface CreateBackupInput {
 export class BackupService {
   private lock: Promise<void> = Promise.resolve()
 
-  constructor(private readonly rootPath: string) {}
+  constructor(
+    private readonly rootPath: string,
+    private readonly commonConfigs: CommonConfigStore
+  ) {}
 
   async list(): Promise<BackupSummary[]> {
     return this.withLock(async () => {
       const document = await this.loadIndex()
       return document.backups
-        .map(toSummary)
+        .map((record) => toSummary(this.getRestorableRecord(record)))
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     })
   }
 
   async create(input: CreateBackupInput): Promise<BackupSummary> {
     return this.withLock(async () => {
+      if (
+        input.additionalFiles?.some(
+          (file) => file.path !== this.commonConfigs.getPath(input.toolId)
+        )
+      ) {
+        throw new AppError('INVALID_INPUT', '备份仅支持工具配置及对应的共通模板。')
+      }
       assertSecureStorageAvailable()
       const document = await this.loadIndex()
       const id = randomUUID()
@@ -66,11 +86,24 @@ export class BackupService {
         providerName: input.providerName,
         reason: input.reason,
         originalFileExisted: input.content !== null,
-        checksum: hashContent(input.content)
+        relatedPaths: input.additionalFiles?.map((file) => file.path) ?? [],
+        checksum: hashContent(input.content),
+        additionalFiles: input.additionalFiles?.map((file) => ({
+          path: file.path,
+          originalFileExisted: file.content !== null,
+          checksum: hashContent(file.content)
+        }))
       }
 
-      if (input.content !== null) {
-        const encryptedContent = encryptSecret(input.content)
+      if (input.content !== null || input.additionalFiles?.some((file) => file.content !== null)) {
+        const payload = JSON.stringify({
+          version: 2,
+          content: input.content,
+          additionalContents: Object.fromEntries(
+            (input.additionalFiles ?? []).map((file) => [file.path, file.content])
+          )
+        })
+        const encryptedContent = encryptSecret(payload)
         await writeTextAtomic(this.getPayloadPath(record), encryptedContent, true)
       }
 
@@ -98,7 +131,12 @@ export class BackupService {
         throw new AppError('BACKUP_NOT_FOUND', '备份不存在，可能已被清理。')
       }
 
-      if (!record.originalFileExisted) return { record, content: null }
+      if (
+        !record.originalFileExisted &&
+        !(record.additionalFiles ?? []).some((file) => file.originalFileExisted)
+      ) {
+        return this.getRestorablePayload(record, null, {})
+      }
       assertSecureStorageAvailable()
       const encryptedContent = await readOptionalText(this.getPayloadPath(record))
       if (encryptedContent === null) {
@@ -106,15 +144,50 @@ export class BackupService {
       }
 
       try {
-        const content = decryptSecret(encryptedContent, '备份无法解密或校验失败，未修改配置文件。')
-        if (hashContent(content) !== record.checksum) {
+        const decrypted = decryptSecret(
+          encryptedContent,
+          '备份无法解密或校验失败，未修改配置文件。'
+        )
+        const payload = parsePayload(decrypted, record)
+        if (hashContent(payload.content) !== record.checksum) {
           throw new Error('Checksum mismatch')
         }
-        return { record, content }
+        for (const file of record.additionalFiles ?? []) {
+          if (hashContent(payload.additionalContents[file.path] ?? null) !== file.checksum) {
+            throw new Error('Additional checksum mismatch')
+          }
+        }
+        return this.getRestorablePayload(record, payload.content, payload.additionalContents)
       } catch {
         throw new AppError('STORAGE_CORRUPTED', '备份无法解密或校验失败，未修改配置文件。')
       }
     })
+  }
+
+  /** Older multi-file backups may include files the application no longer manages. */
+  private getRestorableRecord(record: BackupRecord): BackupRecord {
+    const additionalFiles = (record.additionalFiles ?? []).filter(
+      (file) => file.path === this.commonConfigs.getPath(record.toolId)
+    )
+    return { ...record, additionalFiles, relatedPaths: additionalFiles.map((file) => file.path) }
+  }
+
+  private getRestorablePayload(
+    record: BackupRecord,
+    content: string | null,
+    additionalContents: Record<string, string | null>
+  ): BackupPayload {
+    const restorable = this.getRestorableRecord(record)
+    return {
+      record: restorable,
+      content,
+      additionalContents: Object.fromEntries(
+        (restorable.additionalFiles ?? []).map((file) => [
+          file.path,
+          additionalContents[file.path] ?? null
+        ])
+      )
+    }
   }
 
   private async loadIndex(): Promise<BackupIndexDocument> {
@@ -186,7 +259,8 @@ function toSummary(record: BackupRecord): BackupSummary {
     providerId: record.providerId,
     providerName: record.providerName,
     reason: record.reason,
-    originalFileExisted: record.originalFileExisted
+    originalFileExisted: record.originalFileExisted,
+    relatedPaths: record.additionalFiles?.map((file) => file.path) ?? record.relatedPaths ?? []
   }
 }
 
@@ -208,11 +282,51 @@ function isBackupRecord(value: unknown): value is BackupRecord {
     isAbsolute(value.targetPath) &&
     (isUuid(value.providerId) || value.providerId === null) &&
     (typeof value.providerName === 'string' || value.providerName === null) &&
-    (value.reason === 'apply' || value.reason === 'restore') &&
+    (value.reason === 'apply' || value.reason === 'restore' || value.reason === 'common') &&
+    typeof value.originalFileExisted === 'boolean' &&
+    (value.relatedPaths === undefined ||
+      (Array.isArray(value.relatedPaths) &&
+        value.relatedPaths.every((path) => typeof path === 'string' && isAbsolute(path)))) &&
+    typeof value.checksum === 'string' &&
+    /^[0-9a-f]{64}$/u.test(value.checksum) &&
+    (value.additionalFiles === undefined ||
+      (Array.isArray(value.additionalFiles) && value.additionalFiles.every(isBackupFileRecord)))
+  )
+}
+
+function isBackupFileRecord(value: unknown): value is BackupFileRecord {
+  return (
+    isRecord(value) &&
+    typeof value.path === 'string' &&
+    isAbsolute(value.path) &&
     typeof value.originalFileExisted === 'boolean' &&
     typeof value.checksum === 'string' &&
     /^[0-9a-f]{64}$/u.test(value.checksum)
   )
+}
+
+function parsePayload(
+  decrypted: string,
+  record: BackupRecord
+): { content: string | null; additionalContents: Record<string, string | null> } {
+  try {
+    const value: unknown = JSON.parse(decrypted)
+    if (isRecord(value) && value.version === 2 && isRecord(value.additionalContents)) {
+      if (typeof value.content !== 'string' && value.content !== null)
+        throw new Error('Invalid content')
+      const additionalContents: Record<string, string | null> = {}
+      for (const [path, content] of Object.entries(value.additionalContents)) {
+        if (typeof content !== 'string' && content !== null) throw new Error('Invalid content')
+        additionalContents[path] = content
+      }
+      return { content: value.content, additionalContents }
+    }
+  } catch {
+    // Version 1 backups store the encrypted primary file contents directly.
+  }
+
+  if (record.additionalFiles?.length) throw new Error('Missing additional contents')
+  return { content: decrypted, additionalContents: {} }
 }
 
 function isUuid(value: unknown): value is string {

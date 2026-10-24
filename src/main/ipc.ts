@@ -6,6 +6,9 @@ import {
   type AppInfo,
   type ApplyProviderInput,
   type CreateProviderInput,
+  type CommonConfigInput,
+  type SaveCommonConfigInput,
+  type PreviewConfigInput,
   type DeleteProviderInput,
   type PickToolPathInput,
   type ResetToolPathInput,
@@ -48,11 +51,9 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
     async (input, event) => {
       const window = BrowserWindow.fromWebContents(event.sender)
       if (!window) throw new AppError('INVALID_INPUT', '无法识别应用窗口。')
-      const extension = input.toolId === 'claude-code' ? 'json' : 'toml'
       const result = await dialog.showOpenDialog(window, {
-        title: `选择 ${input.toolId === 'claude-code' ? 'Claude Code' : 'Codex'} 配置文件`,
-        properties: ['openFile'],
-        filters: [{ name: '配置文件', extensions: [extension] }]
+        title: `选择 ${input.toolId === 'claude-code' ? 'Claude Code' : 'Codex'} 配置目录`,
+        properties: ['openDirectory']
       })
       return result.canceled ? null : (result.filePaths[0] ?? null)
     }
@@ -68,6 +69,18 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
   )
   registerBusinessHandler(IPC_CHANNELS.restoreBackup, rendererUrl, parseRestoreBackup, (input) =>
     controller.restoreBackup(input)
+  )
+  registerBusinessHandler(IPC_CHANNELS.getCommonConfig, rendererUrl, parseCommonConfig, (input) =>
+    controller.getCommonConfig(input)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.saveCommonConfig,
+    rendererUrl,
+    parseSaveCommonConfig,
+    (input) => controller.saveCommonConfig(input)
+  )
+  registerBusinessHandler(IPC_CHANNELS.previewConfig, rendererUrl, parsePreviewConfig, (input) =>
+    controller.previewConfig(input)
   )
 
   return () => {
@@ -169,6 +182,40 @@ function parseApplyProvider(args: unknown[]): ApplyProviderInput {
 function parseRestoreBackup(args: unknown[]): RestoreBackupInput {
   const input = expectRecordArgument(args)
   return { backupId: expectIdentifier(input.backupId) }
+}
+
+function parseCommonConfig(args: unknown[]): CommonConfigInput {
+  const input = expectRecordArgument(args)
+  if (input.fromCurrent !== undefined && typeof input.fromCurrent !== 'boolean')
+    throw invalidRequest()
+  return {
+    toolId: expectToolId(input.toolId),
+    fromCurrent: input.fromCurrent as boolean | undefined
+  }
+}
+
+function parseSaveCommonConfig(args: unknown[]): SaveCommonConfigInput {
+  const input = expectRecordArgument(args)
+  const revision = expectString(input.revision, 64)
+  if (!/^[a-f0-9]{64}$/u.test(revision)) throw invalidRequest()
+  return {
+    toolId: expectToolId(input.toolId),
+    content: expectString(input.content, 1024 * 1024),
+    revision
+  }
+}
+
+function parsePreviewConfig(args: unknown[]): PreviewConfigInput {
+  const input = expectRecordArgument(args)
+  if (input.providerId !== undefined && input.draft !== undefined) throw invalidRequest()
+  const draft = input.draft === undefined ? undefined : expectRecord(input.draft)
+  return {
+    toolId: expectToolId(input.toolId),
+    ...(input.providerId === undefined ? {} : { providerId: expectIdentifier(input.providerId) }),
+    ...(draft === undefined
+      ? {}
+      : { draft: 'id' in draft ? parseUpdateProvider([draft]) : parseCreateProvider([draft]) })
+  }
 }
 
 function expectRecordArgument(args: unknown[]): Record<string, unknown> {

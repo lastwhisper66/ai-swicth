@@ -29,6 +29,7 @@ export class ToolStatusService {
         return {
           toolId,
           path: resolvedPath.path,
+          directory: resolvedPath.directory,
           pathSource: resolvedPath.source,
           fileState: 'unreadable',
           statusMessage: '没有权限读取配置文件，请检查文件权限。',
@@ -47,6 +48,7 @@ export class ToolStatusService {
       return {
         toolId,
         path: resolvedPath.path,
+        directory: resolvedPath.directory,
         pathSource: resolvedPath.source,
         fileState: 'missing',
         statusMessage: '配置文件尚不存在，首次应用时将创建。',
@@ -69,13 +71,16 @@ export class ToolStatusService {
       return {
         toolId,
         path: resolvedPath.path,
+        directory: resolvedPath.directory,
         pathSource: resolvedPath.source,
         fileState: 'ready',
         statusMessage: matchedProvider
           ? `当前使用 ${matchedProvider.name}。`
-          : hasConfiguration
-            ? '当前配置不匹配任何已保存供应商。'
-            : '配置文件可读取，但尚未设置供应商。',
+          : toolId === 'codex' && current.model && !current.apiKey
+            ? 'config.toml 中尚未保存 API Key，请选择已保存的供应商并重新应用。'
+            : hasConfiguration
+              ? '当前配置不匹配任何已保存供应商。'
+              : '配置文件可读取，但尚未设置供应商。',
         currentProviderId: matchedProvider?.id ?? null,
         currentProviderName: matchedProvider?.name ?? null,
         isExternalConfig: hasConfiguration && !matchedProvider,
@@ -87,6 +92,7 @@ export class ToolStatusService {
         return {
           toolId,
           path: resolvedPath.path,
+          directory: resolvedPath.directory,
           pathSource: resolvedPath.source,
           fileState: 'invalid',
           statusMessage: error.message,

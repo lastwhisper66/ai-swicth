@@ -55,7 +55,7 @@ export class ProviderStore {
   async create(input: CreateProviderInput): Promise<ProviderSummary> {
     const validated = validateProviderInput(input)
     const document = await this.load()
-    this.assertUniqueName(document.providers, validated.name)
+    this.assertUniqueName(document.providers, validated.name, validated.tools)
     const now = new Date().toISOString()
     const record: ProviderRecord = {
       id: randomUUID(),
@@ -83,7 +83,7 @@ export class ProviderStore {
       throw new AppError('PROVIDER_NOT_FOUND', '供应商不存在，可能已被删除。')
     }
 
-    this.assertUniqueName(document.providers, validated.name, provider.id)
+    this.assertUniqueName(document.providers, validated.name, validated.tools, provider.id)
     provider.name = validated.name
     provider.baseUrl = validated.baseUrl
     provider.tools = validated.tools
@@ -182,14 +182,21 @@ export class ProviderStore {
     }
   }
 
-  private assertUniqueName(providers: ProviderRecord[], name: string, currentId?: string): void {
+  private assertUniqueName(
+    providers: ProviderRecord[],
+    name: string,
+    tools: ToolId[],
+    currentId?: string
+  ): void {
     const duplicate = providers.some(
       (provider) =>
-        provider.id !== currentId && provider.name.toLocaleLowerCase() === name.toLocaleLowerCase()
+        provider.id !== currentId &&
+        provider.name.toLocaleLowerCase() === name.toLocaleLowerCase() &&
+        provider.tools.some((toolId) => tools.includes(toolId))
     )
     if (duplicate) {
-      throw new AppError('DUPLICATE_PROVIDER', '供应商名称已存在。', {
-        name: '请使用不同的供应商名称。'
+      throw new AppError('DUPLICATE_PROVIDER', '此工具中已存在同名供应商。', {
+        name: '请为此工具使用不同的供应商名称。'
       })
     }
   }
@@ -274,12 +281,16 @@ function isProviderDocument(value: unknown): value is ProviderDocument {
 
   if (!value.providers.every(isProviderRecord)) return false
   const ids = new Set<string>()
-  const names = new Set<string>()
+  const names = new Map<ToolId, Set<string>>(TOOL_IDS.map((toolId) => [toolId, new Set()]))
   for (const provider of value.providers) {
     const normalizedName = provider.name.toLocaleLowerCase()
-    if (ids.has(provider.id) || names.has(normalizedName)) return false
+    if (ids.has(provider.id)) return false
     ids.add(provider.id)
-    names.add(normalizedName)
+    for (const toolId of provider.tools) {
+      const toolNames = names.get(toolId)!
+      if (toolNames.has(normalizedName)) return false
+      toolNames.add(normalizedName)
+    }
   }
   return true
 }

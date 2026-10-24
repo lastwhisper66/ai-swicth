@@ -10,6 +10,9 @@ const api: DesktopApi = {
   pickToolPath: (input) => ipcRenderer.invoke(IPC_CHANNELS.pickToolPath, input),
   setToolPath: (input) => ipcRenderer.invoke(IPC_CHANNELS.setToolPath, input),
   resetToolPath: (input) => ipcRenderer.invoke(IPC_CHANNELS.resetToolPath, input),
+  getCommonConfig: (input) => ipcRenderer.invoke(IPC_CHANNELS.getCommonConfig, input),
+  saveCommonConfig: (input) => ipcRenderer.invoke(IPC_CHANNELS.saveCommonConfig, input),
+  previewConfig: (input) => ipcRenderer.invoke(IPC_CHANNELS.previewConfig, input),
   applyProvider: (input) => ipcRenderer.invoke(IPC_CHANNELS.applyProvider, input),
   restoreBackup: (input) => ipcRenderer.invoke(IPC_CHANNELS.restoreBackup, input)
 }

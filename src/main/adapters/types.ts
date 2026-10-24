@@ -22,6 +22,9 @@ export interface GeneratedToolConfiguration {
 export interface ToolAdapter {
   readonly toolId: ToolId
   readonly displayName: string
+  extractCommon(content: string | null): string
+  applyCommon(content: string | null, commonContent: string): string
+  validateCommon(content: string): void
   parseCurrent(content: string | null): CurrentToolConfiguration
   generate(
     content: string | null,
