@@ -1,7 +1,11 @@
 import { app } from 'electron'
 import type {
   AppSnapshot,
-  AppSettings,
+  AppSettingsInput,
+  CloudBackupOperationInput,
+  CloudBackupOperationResult,
+  CloudBackupConnectionResult,
+  CloudBackupSettingsInput,
   ApplyProviderInput,
   ApplyResult,
   CreateProviderInput,
@@ -27,6 +31,7 @@ import type { SwitchService } from './switch'
 import type { ToolStatusService } from './tool-status'
 import { openToolLocation } from './tool-location'
 import type { AppSettingsStore } from './app-settings'
+import type { CloudBackupService } from './cloud-backup'
 
 export class AppController {
   private mutationLock: Promise<void> = Promise.resolve()
@@ -37,7 +42,8 @@ export class AppController {
     private readonly backupService: BackupService,
     private readonly switchService: SwitchService,
     private readonly toolStatusService: ToolStatusService,
-    private readonly appSettings: AppSettingsStore
+    private readonly appSettings: AppSettingsStore,
+    private readonly cloudBackup: CloudBackupService
   ) {}
 
   async getSnapshot(refreshInstallations = false): Promise<AppSnapshot> {
@@ -55,10 +61,52 @@ export class AppController {
     }
   }
 
-  async setAppSettings(input: AppSettings): Promise<AppSnapshot> {
+  async setAppSettings(input: AppSettingsInput): Promise<AppSnapshot> {
     return this.withMutation(async () => {
       await this.appSettings.set(input)
       return this.getSnapshot()
+    })
+  }
+
+  async setCloudBackupSettings(input: CloudBackupSettingsInput): Promise<AppSnapshot> {
+    return this.withMutation(async () => {
+      await this.appSettings.setCloudBackup(input)
+      return this.getSnapshot()
+    })
+  }
+
+  async testCloudBackup(): Promise<CloudBackupConnectionResult> {
+    return this.withMutation(() => this.cloudBackup.testConnection())
+  }
+
+  async setCloudBackupPassword(input: CloudBackupOperationInput): Promise<AppSnapshot> {
+    return this.withMutation(async () => {
+      await this.appSettings.setCloudBackupPassword(input.encryptionPassword)
+      return this.getSnapshot()
+    })
+  }
+
+  async uploadCloudBackup(
+    input: CloudBackupOperationInput
+  ): Promise<OperationResponse<CloudBackupOperationResult>> {
+    return this.withMutation(async () => {
+      await this.appSettings.setCloudBackupPassword(input.encryptionPassword)
+      return {
+        operation: await this.cloudBackup.upload(input.encryptionPassword),
+        snapshot: await this.getSnapshot()
+      }
+    })
+  }
+
+  async restoreCloudBackup(
+    input: CloudBackupOperationInput
+  ): Promise<OperationResponse<CloudBackupOperationResult>> {
+    return this.withMutation(async () => {
+      await this.appSettings.setCloudBackupPassword(input.encryptionPassword)
+      return {
+        operation: await this.cloudBackup.restore(input.encryptionPassword),
+        snapshot: await this.getSnapshot()
+      }
     })
   }
 

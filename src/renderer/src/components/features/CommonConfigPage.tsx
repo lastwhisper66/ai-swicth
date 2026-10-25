@@ -227,9 +227,7 @@ function CommonConfigEditor({
                 <span className="block">
                   这是完整模板，删除字段会同步从工具配置中删除。保存会立即应用，并保留当前供应商字段。
                 </span>
-                <span className="mt-2 block break-all">
-                  本地加密模板：{configuration.templatePath}
-                </span>
+                <span className="mt-2 block break-all">本地模板：{configuration.templatePath}</span>
               </FieldDescription>
             </Field>
           )

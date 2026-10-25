@@ -2,6 +2,11 @@ export const IPC_CHANNELS = {
   getAppInfo: 'app:get-info',
   getSnapshot: 'app:get-snapshot',
   setAppSettings: 'app:set-settings',
+  setCloudBackupSettings: 'cloud-backup:set-settings',
+  setCloudBackupPassword: 'cloud-backup:set-password',
+  testCloudBackup: 'cloud-backup:test',
+  uploadCloudBackup: 'cloud-backup:upload',
+  restoreCloudBackup: 'cloud-backup:restore',
   setNativeTheme: 'app:set-native-theme',
   createProvider: 'providers:create',
   updateProvider: 'providers:update',
@@ -23,6 +28,8 @@ export type ToolId = (typeof TOOL_IDS)[number]
 
 export type ToolModels = Partial<Record<ToolId, string>>
 
+export const CLOUD_BACKUP_RETENTION = { defaultCount: 5, options: [1, 3, 5, 10, 20] } as const
+
 export interface AppInfo {
   name: string
   version: string
@@ -36,7 +43,44 @@ export interface SetNativeThemeInput {
   theme: AppTheme
 }
 
+export interface CloudBackupSettings {
+  enabled: boolean
+  endpoint: string
+  region: string
+  bucket: string
+  prefix: string
+  retentionCount: number
+  accessKeyId: string
+  hasSecret: boolean
+  maskedSecret: string
+  encryptionPassword: string
+}
+
+export type CloudSecretUpdate =
+  | { mode: 'keep' }
+  | { mode: 'clear' }
+  | {
+      mode: 'replace'
+      value: string
+    }
+
+export interface CloudBackupSettingsInput {
+  enabled: boolean
+  endpoint: string
+  region: string
+  bucket: string
+  prefix: string
+  retentionCount: number
+  accessKeyId: string
+  secretAccessKey: CloudSecretUpdate
+}
+
 export interface AppSettings {
+  closeBehavior: CloseBehavior
+  cloudBackup: CloudBackupSettings
+}
+
+export interface AppSettingsInput {
   closeBehavior: CloseBehavior
 }
 
@@ -182,6 +226,23 @@ export interface RestoreResult {
   restartRequired: boolean
 }
 
+export interface CloudBackupOperationInput {
+  encryptionPassword: string
+}
+
+export interface CloudBackupOperationResult {
+  objectKey: string
+  createdAt: string
+  providerCount: number
+  commonConfigCount: number
+  message: string
+  warnings: string[]
+}
+
+export interface CloudBackupConnectionResult {
+  message: string
+}
+
 export interface OperationResponse<T> {
   operation: T
   snapshot: AppSnapshot
@@ -222,6 +283,9 @@ export type ApiErrorCode =
   | 'BACKUP_NOT_FOUND'
   | 'WRITE_FAILED'
   | 'ROLLBACK_FAILED'
+  | 'CLOUD_NOT_CONFIGURED'
+  | 'CLOUD_UNAVAILABLE'
+  | 'CLOUD_BACKUP_INVALID'
   | 'UNKNOWN'
 
 export interface ApiError {
@@ -235,7 +299,16 @@ export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: ApiError
 export interface DesktopApi {
   getAppInfo: () => Promise<AppInfo>
   getSnapshot: () => Promise<ApiResult<AppSnapshot>>
-  setAppSettings: (input: AppSettings) => Promise<ApiResult<AppSnapshot>>
+  setAppSettings: (input: AppSettingsInput) => Promise<ApiResult<AppSnapshot>>
+  setCloudBackupSettings: (input: CloudBackupSettingsInput) => Promise<ApiResult<AppSnapshot>>
+  setCloudBackupPassword: (input: CloudBackupOperationInput) => Promise<ApiResult<AppSnapshot>>
+  testCloudBackup: () => Promise<ApiResult<CloudBackupConnectionResult>>
+  uploadCloudBackup: (
+    input: CloudBackupOperationInput
+  ) => Promise<ApiResult<OperationResponse<CloudBackupOperationResult>>>
+  restoreCloudBackup: (
+    input: CloudBackupOperationInput
+  ) => Promise<ApiResult<OperationResponse<CloudBackupOperationResult>>>
   setNativeTheme: (input: SetNativeThemeInput) => Promise<ApiResult<void>>
   createProvider: (input: CreateProviderInput) => Promise<ApiResult<AppSnapshot>>
   updateProvider: (input: UpdateProviderInput) => Promise<ApiResult<AppSnapshot>>

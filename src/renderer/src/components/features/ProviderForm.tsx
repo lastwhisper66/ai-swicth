@@ -196,7 +196,7 @@ export function ProviderForm({
                   hint={
                     provider
                       ? `当前密钥：${provider.maskedApiKey}，留空可保留。`
-                      : '密钥仅在本机加密保存。'
+                      : '密钥保存在本机应用数据目录中，上传云端时会使用备份密码整体加密。'
                   }
                 >
                   <InputGroup>

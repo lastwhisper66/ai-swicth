@@ -4,11 +4,6 @@ import { isAbsolute, join } from 'node:path'
 import type { BackupReason, BackupSummary, ToolId } from '@shared/ipc'
 import { TOOL_IDS } from '@shared/ipc'
 import { AppError } from '../errors'
-import {
-  assertSecureStorageAvailable,
-  decryptSecret,
-  encryptSecret
-} from '../security/secure-storage'
 import { hashContent, readOptionalText, writeTextAtomic } from '../utils/files'
 import type { CommonConfigStore } from './common-config'
 
@@ -74,7 +69,6 @@ export class BackupService {
       ) {
         throw new AppError('INVALID_INPUT', '备份仅支持工具配置及对应的共通模板。')
       }
-      assertSecureStorageAvailable()
       const document = await this.loadIndex()
       const id = randomUUID()
       const record: BackupRecord = {
@@ -103,8 +97,7 @@ export class BackupService {
             (input.additionalFiles ?? []).map((file) => [file.path, file.content])
           )
         })
-        const encryptedContent = encryptSecret(payload)
-        await writeTextAtomic(this.getPayloadPath(record), encryptedContent, true)
+        await writeTextAtomic(this.getPayloadPath(record), payload, true)
       }
 
       document.backups.push(record)
@@ -137,18 +130,13 @@ export class BackupService {
       ) {
         return this.getRestorablePayload(record, null, {})
       }
-      assertSecureStorageAvailable()
-      const encryptedContent = await readOptionalText(this.getPayloadPath(record))
-      if (encryptedContent === null) {
+      const storedContent = await readOptionalText(this.getPayloadPath(record))
+      if (storedContent === null) {
         throw new AppError('BACKUP_NOT_FOUND', '备份正文不存在，无法恢复。')
       }
 
       try {
-        const decrypted = decryptSecret(
-          encryptedContent,
-          '备份无法解密或校验失败，未修改配置文件。'
-        )
-        const payload = parsePayload(decrypted, record)
+        const payload = parsePayload(storedContent, record)
         if (hashContent(payload.content) !== record.checksum) {
           throw new Error('Checksum mismatch')
         }
@@ -159,7 +147,7 @@ export class BackupService {
         }
         return this.getRestorablePayload(record, payload.content, payload.additionalContents)
       } catch {
-        throw new AppError('STORAGE_CORRUPTED', '备份无法解密或校验失败，未修改配置文件。')
+        throw new AppError('STORAGE_CORRUPTED', '备份正文无法读取或校验失败，未修改配置文件。')
       }
     })
   }

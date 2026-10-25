@@ -4,9 +4,12 @@ import { toast } from 'sonner'
 import type {
   ApiResult,
   AppSnapshot,
+  CloudBackupOperationResult,
+  CloudBackupSettingsInput,
   CloseBehavior,
   OpenToolLocationInput,
   ProviderSummary,
+  OperationResponse,
   ToolId
 } from '@shared/ipc'
 import { ToolIcon } from '@renderer/components/ToolIcon'
@@ -116,6 +119,68 @@ function App(): React.JSX.Element {
       () => window.api.setAppSettings({ closeBehavior }),
       closeBehavior === 'tray' ? '关闭窗口后将保留在系统托盘。' : '关闭窗口后将直接退出应用程序。'
     )
+  }
+
+  async function saveCloudBackupSettings(input: CloudBackupSettingsInput): Promise<void> {
+    await runSnapshotOperation(
+      'cloud:settings',
+      () => window.api.setCloudBackupSettings(input),
+      '云端备份设置已保存。'
+    )
+  }
+
+  async function testCloudBackup(): Promise<void> {
+    setPendingKey('cloud:test')
+    try {
+      const result = await window.api.testCloudBackup()
+      if (!result.ok) return showError(result.error.message)
+      showSuccess(result.value.message)
+    } catch {
+      showError('无法连接本地应用，请重新打开应用后重试。')
+    } finally {
+      setPendingKey(null)
+    }
+  }
+
+  async function saveCloudBackupPassword(encryptionPassword: string): Promise<void> {
+    try {
+      const result = await window.api.setCloudBackupPassword({ encryptionPassword })
+      if (!result.ok) return showError(result.error.message)
+      adoptSnapshot(result.value)
+    } catch {
+      showError('备份密码未能保存到本机，请重新打开应用后重试。')
+    }
+  }
+
+  async function uploadCloudBackup(encryptionPassword: string): Promise<void> {
+    await runCloudBackupOperation('cloud:upload', () =>
+      window.api.uploadCloudBackup({ encryptionPassword })
+    )
+  }
+
+  async function restoreCloudBackup(encryptionPassword: string): Promise<void> {
+    await runCloudBackupOperation('cloud:restore', () =>
+      window.api.restoreCloudBackup({ encryptionPassword })
+    )
+  }
+
+  async function runCloudBackupOperation(
+    key: string,
+    operation: () => Promise<ApiResult<OperationResponse<CloudBackupOperationResult>>>
+  ): Promise<void> {
+    setPendingKey(key)
+    try {
+      const result = await operation()
+      if (!result.ok) return showError(result.error.message)
+      adoptSnapshot(result.value.snapshot)
+      const { message, warnings } = result.value.operation
+      if (warnings.length > 0) showWarning(`${message} ${warnings.join(' ')}`)
+      else showSuccess(message)
+    } catch {
+      showError('无法连接本地应用，请重新打开应用后重试。')
+    } finally {
+      setPendingKey(null)
+    }
   }
 
   async function applyProvider(toolId: ToolId, providerId: string): Promise<void> {
@@ -347,6 +412,7 @@ function App(): React.JSX.Element {
               providers={snapshot.providers}
               tools={snapshot.tools}
               backups={snapshot.backups}
+              cloudBackup={snapshot.settings.cloudBackup}
               pendingKey={pendingKey}
               busy={pendingKey !== null}
               providerTool={settingsTool}
@@ -375,6 +441,11 @@ function App(): React.JSX.Element {
               onResetPath={(toolId) => void resetPath(toolId)}
               onOpenLocation={(input) => void openToolLocation(input)}
               onRestore={(backupId) => void restoreBackup(backupId)}
+              onSaveCloudBackup={(input) => void saveCloudBackupSettings(input)}
+              onSaveCloudBackupPassword={(password) => void saveCloudBackupPassword(password)}
+              onTestCloudBackup={() => void testCloudBackup()}
+              onUploadCloudBackup={(password) => void uploadCloudBackup(password)}
+              onRestoreCloudBackup={(password) => void restoreCloudBackup(password)}
               onPendingChange={(pending) => setPendingKey(pending ? 'common:save' : null)}
               onCommonSaved={(nextSnapshot, message) => {
                 adoptSnapshot(nextSnapshot)

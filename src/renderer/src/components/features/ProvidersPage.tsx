@@ -39,7 +39,8 @@ export function ProvidersPage({
         <div>
           <h2 className="text-base font-semibold">供应商设置</h2>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            分别管理两个工具的供应商，API Key 仅在本机加密存储。
+            分别管理两个工具的供应商，API Key
+            保存在本机应用数据目录中；上传云端时会使用备份密码整体加密。
           </p>
         </div>
       </div>

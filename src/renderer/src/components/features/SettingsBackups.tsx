@@ -9,7 +9,14 @@ import {
   Save,
   Undo2
 } from 'lucide-react'
-import type { BackupSummary, OpenToolLocationInput, ToolId, ToolStatus } from '@shared/ipc'
+import type {
+  BackupSummary,
+  CloudBackupSettings,
+  CloudBackupSettingsInput,
+  OpenToolLocationInput,
+  ToolId,
+  ToolStatus
+} from '@shared/ipc'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -44,12 +51,14 @@ import {
 } from '@renderer/components/ui/item'
 import { Spinner } from '@renderer/components/ui/spinner'
 import { ConfigPreview } from './ConfigPreview'
+import { CloudBackupPanel } from './CloudBackupPanel'
 import { InstallationBadge, ToolInstallationStatus } from './ToolInstallationStatus'
 
 interface SettingsBackupsProps {
   section: 'paths' | 'backups'
   tools: Record<ToolId, ToolStatus>
   backups: BackupSummary[]
+  cloudBackup: CloudBackupSettings
   pendingKey: string | null
   busy: boolean
   onSavePath: (toolId: ToolId, path: string) => void
@@ -57,6 +66,11 @@ interface SettingsBackupsProps {
   onResetPath: (toolId: ToolId) => void
   onOpenLocation: (input: OpenToolLocationInput) => void
   onRestore: (backupId: string) => void
+  onSaveCloudBackup: (input: CloudBackupSettingsInput) => void
+  onSaveCloudBackupPassword: (password: string) => void
+  onTestCloudBackup: () => void
+  onUploadCloudBackup: (password: string) => void
+  onRestoreCloudBackup: (password: string) => void
 }
 
 const toolNames: Record<ToolId, string> = {
@@ -68,13 +82,19 @@ export function SettingsBackups({
   section,
   tools,
   backups,
+  cloudBackup,
   pendingKey,
   busy,
   onSavePath,
   onPickPath,
   onResetPath,
   onOpenLocation,
-  onRestore
+  onRestore,
+  onSaveCloudBackup,
+  onSaveCloudBackupPassword,
+  onTestCloudBackup,
+  onUploadCloudBackup,
+  onRestoreCloudBackup
 }: SettingsBackupsProps): React.JSX.Element {
   return (
     <div className="space-y-8">
@@ -109,9 +129,23 @@ export function SettingsBackups({
           <div>
             <h2 className="text-base font-semibold">备份记录</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              应用和恢复前自动创建加密备份，每个工具保留最近 20 份。
+              应用和恢复前自动创建本地备份，每个工具保留最近 20 份。
+            </p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              本地备份正文按普通 JSON 保存，可能包含工具配置中的明文 API
+              Key；需要跨机器迁移时请使用上方的加密云端备份。
             </p>
           </div>
+          <CloudBackupPanel
+            settings={cloudBackup}
+            busy={busy}
+            pendingKey={pendingKey}
+            onSave={onSaveCloudBackup}
+            onSavePassword={onSaveCloudBackupPassword}
+            onTest={onTestCloudBackup}
+            onUpload={onUploadCloudBackup}
+            onRestore={onRestoreCloudBackup}
+          />
           {backups.length === 0 ? (
             <Empty className="border bg-card py-10">
               <EmptyHeader>
@@ -119,7 +153,9 @@ export function SettingsBackups({
                   <HardDrive aria-hidden="true" />
                 </EmptyMedia>
                 <EmptyTitle>尚无备份记录</EmptyTitle>
-                <EmptyDescription>应用供应商配置后，将在这里显示自动创建的备份。</EmptyDescription>
+                <EmptyDescription>
+                  应用供应商配置后，将在这里显示自动创建的本地备份。
+                </EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : (

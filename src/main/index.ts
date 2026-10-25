@@ -13,6 +13,7 @@ import { PathSettingsStore } from './services/path-settings'
 import { SwitchService } from './services/switch'
 import { ToolStatusService } from './services/tool-status'
 import { AppSettingsStore } from './services/app-settings'
+import { CloudBackupService } from './services/cloud-backup'
 import { ToolInstallationService } from './services/tool-installation'
 import { toApiError } from './errors'
 import icon from '../../resources/icon.png?asset'
@@ -145,6 +146,7 @@ app.whenReady().then(async () => {
   const pathSettings = new PathSettingsStore(join(userDataPath, 'settings.v1.json'))
   const commonConfigs = new CommonConfigStore(userDataPath)
   const backupService = new BackupService(join(userDataPath, 'backups'), commonConfigs)
+  const cloudBackupService = new CloudBackupService(providerStore, commonConfigs, appSettings)
   const adapters = {
     'claude-code': new ClaudeCodeAdapter(),
     codex: new CodexAdapter()
@@ -168,7 +170,8 @@ app.whenReady().then(async () => {
     backupService,
     switchService,
     toolStatusService,
-    appSettings
+    appSettings,
+    cloudBackupService
   )
   const unregisterIpc = registerAppIpc(rendererUrl, controller)
   app.once('before-quit', unregisterIpc)

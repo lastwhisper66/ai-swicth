@@ -3,6 +3,8 @@ import type {
   AppSnapshot,
   AppSettings,
   BackupSummary,
+  CloudBackupSettings,
+  CloudBackupSettingsInput,
   CloseBehavior,
   OpenToolLocationInput,
   ProviderSummary,
@@ -25,6 +27,7 @@ interface SettingsPageProps {
   providers: ProviderSummary[]
   tools: Record<ToolId, ToolStatus>
   backups: BackupSummary[]
+  cloudBackup: CloudBackupSettings
   pendingKey: string | null
   busy: boolean
   providerTool: ToolId
@@ -40,6 +43,11 @@ interface SettingsPageProps {
   onRestore: (backupId: string) => void
   onPendingChange: (pending: boolean) => void
   onCommonSaved: (snapshot: AppSnapshot, message: string) => void
+  onSaveCloudBackup: (input: CloudBackupSettingsInput) => void
+  onSaveCloudBackupPassword: (password: string) => void
+  onTestCloudBackup: () => void
+  onUploadCloudBackup: (password: string) => void
+  onRestoreCloudBackup: (password: string) => void
 }
 
 const items: Array<{
@@ -73,6 +81,7 @@ export function SettingsPage({
   providers,
   tools,
   backups,
+  cloudBackup,
   pendingKey,
   busy,
   providerTool,
@@ -87,7 +96,12 @@ export function SettingsPage({
   onOpenLocation,
   onRestore,
   onPendingChange,
-  onCommonSaved
+  onCommonSaved,
+  onSaveCloudBackup,
+  onSaveCloudBackupPassword,
+  onTestCloudBackup,
+  onUploadCloudBackup,
+  onRestoreCloudBackup
 }: SettingsPageProps): React.JSX.Element {
   return (
     <div className="grid gap-6 lg:grid-cols-[14rem_minmax(0,1fr)]">
@@ -145,6 +159,7 @@ export function SettingsPage({
             section={section}
             tools={tools}
             backups={backups}
+            cloudBackup={cloudBackup}
             pendingKey={pendingKey}
             busy={busy}
             onSavePath={onSavePath}
@@ -152,6 +167,11 @@ export function SettingsPage({
             onResetPath={onResetPath}
             onOpenLocation={onOpenLocation}
             onRestore={onRestore}
+            onSaveCloudBackup={onSaveCloudBackup}
+            onSaveCloudBackupPassword={onSaveCloudBackupPassword}
+            onTestCloudBackup={onTestCloudBackup}
+            onUploadCloudBackup={onUploadCloudBackup}
+            onRestoreCloudBackup={onRestoreCloudBackup}
           />
         )}
       </section>

@@ -8,7 +8,6 @@ import type {
 } from '@shared/ipc'
 import { TOOL_IDS } from '@shared/ipc'
 import { AppError } from '../errors'
-import { decryptSecret, encryptSecret } from '../security/secure-storage'
 import { readOptionalText, writeTextAtomic } from '../utils/files'
 
 const STORAGE_VERSION = 1
@@ -18,7 +17,7 @@ interface ProviderRecord {
   id: string
   name: string
   baseUrl: string
-  encryptedApiKey: string
+  apiKey: string
   tools: ToolId[]
   models: ToolModels
   createdAt: string
@@ -32,6 +31,17 @@ interface ProviderDocument {
 
 export interface ResolvedProvider extends ProviderSummary {
   apiKey: string
+}
+
+export interface PortableProvider {
+  id: string
+  name: string
+  baseUrl: string
+  apiKey: string
+  tools: ToolId[]
+  models: ToolModels
+  createdAt: string
+  updatedAt: string
 }
 
 interface ValidatedProviderInput {
@@ -61,7 +71,7 @@ export class ProviderStore {
       id: randomUUID(),
       name: validated.name,
       baseUrl: validated.baseUrl,
-      encryptedApiKey: this.encryptApiKey(validated.apiKey ?? ''),
+      apiKey: validated.apiKey ?? '',
       tools: validated.tools,
       models: validated.models,
       createdAt: now,
@@ -90,7 +100,7 @@ export class ProviderStore {
     provider.models = validated.models
     provider.updatedAt = new Date().toISOString()
     if (validated.apiKey !== null) {
-      provider.encryptedApiKey = this.encryptApiKey(validated.apiKey)
+      provider.apiKey = validated.apiKey
     }
 
     await this.save(document)
@@ -115,29 +125,60 @@ export class ProviderStore {
       throw new AppError('PROVIDER_NOT_FOUND', '供应商不存在，可能已被删除。')
     }
 
-    return { ...this.toSummary(provider), apiKey: this.decryptApiKey(provider.encryptedApiKey) }
+    return { ...this.toSummary(provider), apiKey: provider.apiKey }
   }
 
   async listResolved(): Promise<ResolvedProvider[]> {
     const document = await this.load()
-    const resolved: ResolvedProvider[] = []
-    for (const provider of document.providers) {
-      try {
-        resolved.push({
-          ...this.toSummary(provider),
-          apiKey: this.decryptApiKey(provider.encryptedApiKey)
-        })
-      } catch (error) {
-        if (
-          error instanceof AppError &&
-          (error.code === 'STORAGE_CORRUPTED' || error.code === 'SECURE_STORAGE_UNAVAILABLE')
-        ) {
-          continue
-        }
-        throw error
+    return document.providers.map((provider) => ({
+      ...this.toSummary(provider),
+      apiKey: provider.apiKey
+    }))
+  }
+
+  async exportPortable(): Promise<PortableProvider[]> {
+    const document = await this.load()
+    return document.providers.map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      tools: [...provider.tools],
+      models: { ...provider.models },
+      createdAt: provider.createdAt,
+      updatedAt: provider.updatedAt
+    }))
+  }
+
+  async importPortable(providers: PortableProvider[]): Promise<void> {
+    const records = providers.map((provider) => {
+      const validated = validateProviderInput({
+        ...provider,
+        apiKey: provider.apiKey.length > 0 ? provider.apiKey : null
+      })
+      if (
+        !isUuid(provider.id) ||
+        !isIsoDate(provider.createdAt) ||
+        !isIsoDate(provider.updatedAt)
+      ) {
+        throw new AppError('CLOUD_BACKUP_INVALID', '云端备份中的供应商标识或时间无效。')
       }
+      return {
+        id: provider.id,
+        name: validated.name,
+        baseUrl: validated.baseUrl,
+        apiKey: validated.apiKey ?? '',
+        tools: validated.tools,
+        models: validated.models,
+        createdAt: provider.createdAt,
+        updatedAt: provider.updatedAt
+      }
+    })
+    const document: ProviderDocument = { version: STORAGE_VERSION, providers: records }
+    if (!isProviderDocument(document)) {
+      throw new AppError('CLOUD_BACKUP_INVALID', '云端备份中的供应商存在重复或无效字段。')
     }
-    return resolved
+    await this.save(document)
   }
 
   private async load(): Promise<ProviderDocument> {
@@ -160,14 +201,6 @@ export class ProviderStore {
     await writeTextAtomic(this.filePath, `${JSON.stringify(document, null, 2)}\n`, true)
   }
 
-  private encryptApiKey(apiKey: string): string {
-    return encryptSecret(apiKey)
-  }
-
-  private decryptApiKey(encryptedApiKey: string): string {
-    return decryptSecret(encryptedApiKey, '供应商密钥无法解密。请删除该供应商后重新添加。')
-  }
-
   private toSummary(provider: ProviderRecord): ProviderSummary {
     return {
       id: provider.id,
@@ -175,29 +208,18 @@ export class ProviderStore {
       baseUrl: provider.baseUrl,
       tools: [...provider.tools],
       models: { ...provider.models },
-      hasApiKey: true,
-      maskedApiKey: this.getMaskedApiKey(provider.encryptedApiKey),
+      hasApiKey: provider.apiKey.length > 0,
+      maskedApiKey: this.getMaskedApiKey(provider.apiKey),
       createdAt: provider.createdAt,
       updatedAt: provider.updatedAt
     }
   }
 
-  private getMaskedApiKey(encryptedApiKey: string): string {
-    try {
-      const apiKey = this.decryptApiKey(encryptedApiKey)
-      if (apiKey.length >= 18) return `${apiKey.slice(0, 6)}…${apiKey.slice(-6)}`
-      if (apiKey.length >= 12) return `${apiKey.slice(0, 3)}…${apiKey.slice(-4)}`
-      if (apiKey.length >= 6) return `${apiKey.slice(0, 1)}…${apiKey.slice(-2)}`
-      return MASKED_API_KEY
-    } catch (error) {
-      if (
-        error instanceof AppError &&
-        (error.code === 'STORAGE_CORRUPTED' || error.code === 'SECURE_STORAGE_UNAVAILABLE')
-      ) {
-        return '密钥不可读取'
-      }
-      throw error
-    }
+  private getMaskedApiKey(apiKey: string): string {
+    if (apiKey.length >= 18) return `${apiKey.slice(0, 6)}…${apiKey.slice(-6)}`
+    if (apiKey.length >= 12) return `${apiKey.slice(0, 3)}…${apiKey.slice(-4)}`
+    if (apiKey.length >= 6) return `${apiKey.slice(0, 1)}…${apiKey.slice(-2)}`
+    return MASKED_API_KEY
   }
 
   private assertUniqueName(
@@ -324,8 +346,7 @@ function isProviderRecord(value: unknown): value is ProviderRecord {
     value.name.length <= 60 &&
     typeof value.baseUrl === 'string' &&
     isValidStoredBaseUrl(value.baseUrl) &&
-    typeof value.encryptedApiKey === 'string' &&
-    value.encryptedApiKey.length > 0 &&
+    typeof value.apiKey === 'string' &&
     Array.isArray(tools) &&
     tools.length > 0 &&
     new Set(tools).size === tools.length &&

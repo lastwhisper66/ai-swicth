@@ -1,10 +1,13 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, type IpcMainInvokeEvent } from 'electron'
 import {
   IPC_CHANNELS,
+  CLOUD_BACKUP_RETENTION,
   TOOL_IDS,
   type ApiResult,
   type AppInfo,
-  type AppSettings,
+  type AppSettingsInput,
+  type CloudBackupOperationInput,
+  type CloudBackupSettingsInput,
   type ApplyProviderInput,
   type CreateProviderInput,
   type CommonConfigInput,
@@ -40,6 +43,33 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
   )
   registerBusinessHandler(IPC_CHANNELS.setAppSettings, rendererUrl, parseAppSettings, (input) =>
     controller.setAppSettings(input)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.setCloudBackupSettings,
+    rendererUrl,
+    parseCloudBackupSettings,
+    (input) => controller.setCloudBackupSettings(input)
+  )
+  registerBusinessHandler(IPC_CHANNELS.testCloudBackup, rendererUrl, expectNoArguments, () =>
+    controller.testCloudBackup()
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.setCloudBackupPassword,
+    rendererUrl,
+    parseCloudBackupOperation,
+    (input) => controller.setCloudBackupPassword(input)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.uploadCloudBackup,
+    rendererUrl,
+    parseCloudBackupOperation,
+    (input) => controller.uploadCloudBackup(input)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.restoreCloudBackup,
+    rendererUrl,
+    parseCloudBackupOperation,
+    (input) => controller.restoreCloudBackup(input)
   )
   registerBusinessHandler(
     IPC_CHANNELS.setNativeTheme,
@@ -157,10 +187,46 @@ function parseCreateProvider(args: unknown[]): CreateProviderInput {
   }
 }
 
-function parseAppSettings(args: unknown[]): AppSettings {
+function parseAppSettings(args: unknown[]): AppSettingsInput {
   const input = expectRecordArgument(args)
   if (input.closeBehavior !== 'tray' && input.closeBehavior !== 'quit') throw invalidRequest()
   return { closeBehavior: input.closeBehavior }
+}
+
+function parseCloudBackupSettings(args: unknown[]): CloudBackupSettingsInput {
+  const input = expectRecordArgument(args)
+  if (
+    typeof input.retentionCount !== 'number' ||
+    !CLOUD_BACKUP_RETENTION.options.some((count) => count === input.retentionCount)
+  ) {
+    throw new AppError('INVALID_INPUT', '云端备份保留数量请选择 1、3、5、10 或 20 份。')
+  }
+  const secretAccessKey = expectRecord(input.secretAccessKey)
+  if (
+    secretAccessKey.mode !== 'keep' &&
+    secretAccessKey.mode !== 'replace' &&
+    secretAccessKey.mode !== 'clear'
+  ) {
+    throw invalidRequest()
+  }
+  return {
+    enabled: expectBoolean(input.enabled),
+    endpoint: expectString(input.endpoint, 2048),
+    region: expectString(input.region, 100),
+    bucket: expectString(input.bucket, 255),
+    prefix: expectString(input.prefix, 512),
+    retentionCount: input.retentionCount,
+    accessKeyId: expectString(input.accessKeyId, 256),
+    secretAccessKey:
+      secretAccessKey.mode === 'replace'
+        ? { mode: 'replace', value: expectString(secretAccessKey.value, 4096) }
+        : { mode: secretAccessKey.mode }
+  }
+}
+
+function parseCloudBackupOperation(args: unknown[]): CloudBackupOperationInput {
+  const input = expectRecordArgument(args)
+  return { encryptionPassword: expectString(input.encryptionPassword, 256) }
 }
 
 function parseNativeTheme(args: unknown[]): SetNativeThemeInput {
@@ -274,6 +340,11 @@ function expectRecord(value: unknown): Record<string, unknown> {
 
 function expectString(value: unknown, maxLength = 4096): string {
   if (typeof value !== 'string' || value.length > maxLength) throw invalidRequest()
+  return value
+}
+
+function expectBoolean(value: unknown): boolean {
+  if (typeof value !== 'boolean') throw invalidRequest()
   return value
 }
 
