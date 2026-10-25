@@ -4,6 +4,8 @@ import { IPC_CHANNELS, type DesktopApi } from '@shared/ipc'
 const api: DesktopApi = {
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.getAppInfo),
   getSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.getSnapshot),
+  setAppSettings: (input) => ipcRenderer.invoke(IPC_CHANNELS.setAppSettings, input),
+  setNativeTheme: (input) => ipcRenderer.invoke(IPC_CHANNELS.setNativeTheme, input),
   createProvider: (input) => ipcRenderer.invoke(IPC_CHANNELS.createProvider, input),
   updateProvider: (input) => ipcRenderer.invoke(IPC_CHANNELS.updateProvider, input),
   deleteProvider: (input) => ipcRenderer.invoke(IPC_CHANNELS.deleteProvider, input),

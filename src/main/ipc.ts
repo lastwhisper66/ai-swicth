@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, type IpcMainInvokeEvent } from 'electron'
 import {
   IPC_CHANNELS,
   TOOL_IDS,
   type ApiResult,
   type AppInfo,
+  type AppSettings,
   type ApplyProviderInput,
   type CreateProviderInput,
   type CommonConfigInput,
@@ -14,6 +15,7 @@ import {
   type OpenToolLocationInput,
   type ResetToolPathInput,
   type RestoreBackupInput,
+  type SetNativeThemeInput,
   type SetToolPathInput,
   type ToolId,
   type ToolModels,
@@ -34,7 +36,18 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
   })
 
   registerBusinessHandler(IPC_CHANNELS.getSnapshot, rendererUrl, expectNoArguments, () =>
-    controller.getSnapshot()
+    controller.getSnapshot(true)
+  )
+  registerBusinessHandler(IPC_CHANNELS.setAppSettings, rendererUrl, parseAppSettings, (input) =>
+    controller.setAppSettings(input)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.setNativeTheme,
+    rendererUrl,
+    parseNativeTheme,
+    async (input) => {
+      nativeTheme.themeSource = input.theme
+    }
   )
   registerBusinessHandler(IPC_CHANNELS.createProvider, rendererUrl, parseCreateProvider, (input) =>
     controller.createProvider(input)
@@ -142,6 +155,20 @@ function parseCreateProvider(args: unknown[]): CreateProviderInput {
     tools: expectTools(input.tools),
     models: expectModels(input.models)
   }
+}
+
+function parseAppSettings(args: unknown[]): AppSettings {
+  const input = expectRecordArgument(args)
+  if (input.closeBehavior !== 'tray' && input.closeBehavior !== 'quit') throw invalidRequest()
+  return { closeBehavior: input.closeBehavior }
+}
+
+function parseNativeTheme(args: unknown[]): SetNativeThemeInput {
+  const input = expectRecordArgument(args)
+  if (input.theme !== 'system' && input.theme !== 'light' && input.theme !== 'dark') {
+    throw invalidRequest()
+  }
+  return { theme: input.theme }
 }
 
 function parseUpdateProvider(args: unknown[]): UpdateProviderInput {

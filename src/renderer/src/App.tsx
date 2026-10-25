@@ -4,11 +4,13 @@ import { toast } from 'sonner'
 import type {
   ApiResult,
   AppSnapshot,
+  CloseBehavior,
   OpenToolLocationInput,
   ProviderSummary,
   ToolId
 } from '@shared/ipc'
 import { ToolIcon } from '@renderer/components/ToolIcon'
+import { ModeToggle } from '@renderer/components/ModeToggle'
 import { ProviderForm } from '@renderer/components/features/ProviderForm'
 import { SettingsPage, type SettingsSection } from '@renderer/components/features/SettingsPage'
 import { ToolConfigPage } from '@renderer/components/features/ToolConfigPage'
@@ -105,6 +107,14 @@ function App(): React.JSX.Element {
       `delete:${providerId}`,
       () => window.api.deleteProvider({ id: providerId }),
       '供应商已删除。'
+    )
+  }
+
+  async function setCloseBehavior(closeBehavior: CloseBehavior): Promise<void> {
+    await runSnapshotOperation(
+      'settings:save',
+      () => window.api.setAppSettings({ closeBehavior }),
+      closeBehavior === 'tray' ? '关闭窗口后将保留在系统托盘。' : '关闭窗口后将直接退出应用程序。'
     )
   }
 
@@ -259,7 +269,7 @@ function App(): React.JSX.Element {
     <TooltipProvider>
       <div className="min-h-svh">
         <header className="border-b bg-background/95 backdrop-blur">
-          <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-5 py-4 sm:px-8">
+          <div className="flex w-full flex-wrap items-center gap-3 px-5 py-4 sm:px-8">
             <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <ArrowLeftRight className="size-4" aria-hidden="true" />
             </div>
@@ -268,7 +278,7 @@ function App(): React.JSX.Element {
               <p className="text-xs text-muted-foreground">本地供应商配置</p>
             </div>
             <nav
-              className="order-3 flex w-full gap-1 border-t pt-3 sm:order-none sm:ml-6 sm:w-auto sm:border-t-0 sm:pt-0"
+              className="order-3 flex w-full gap-1 border-t pt-3 lg:order-none lg:ml-6 lg:w-auto lg:border-t-0 lg:pt-0"
               aria-label="工具页面"
             >
               <Button
@@ -292,43 +302,47 @@ function App(): React.JSX.Element {
                 Codex
               </Button>
             </nav>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="ml-auto"
-              disabled={pendingKey !== null}
-              onClick={() => void refreshSnapshot()}
-              aria-label="刷新工具状态"
-              title="刷新工具状态"
-            >
-              <RefreshCw
-                className={pendingKey === 'refresh' ? 'animate-spin' : undefined}
-                aria-hidden="true"
-              />
-            </Button>
-            <Button
-              type="button"
-              variant={view === 'settings' ? 'secondary' : 'ghost'}
-              size="icon-sm"
-              disabled={pendingKey !== null}
-              onClick={() => setView('settings')}
-              aria-label="打开设置"
-              title="设置"
-            >
-              <Settings aria-hidden="true" />
-            </Button>
-            <Badge variant="outline" className="gap-1.5">
-              <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden="true" />v
-              {snapshot.appInfo.version}
-            </Badge>
+            <div className="ml-auto flex items-center gap-2">
+              <ModeToggle />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={pendingKey !== null}
+                onClick={() => void refreshSnapshot()}
+                aria-label="刷新工具状态"
+                title="刷新工具状态"
+              >
+                <RefreshCw
+                  className={pendingKey === 'refresh' ? 'animate-spin' : undefined}
+                  aria-hidden="true"
+                />
+              </Button>
+              <Button
+                type="button"
+                variant={view === 'settings' ? 'secondary' : 'ghost'}
+                size="icon-sm"
+                disabled={pendingKey !== null}
+                onClick={() => setView('settings')}
+                aria-label="打开设置"
+                title="设置"
+              >
+                <Settings aria-hidden="true" />
+              </Button>
+              <Badge variant="outline" className="gap-1.5">
+                <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden="true" />v
+                {snapshot.appInfo.version}
+              </Badge>
+            </div>
           </div>
         </header>
 
-        <main className="mx-auto max-w-6xl px-5 py-6 sm:px-8 sm:py-8">
+        <main className="w-full px-5 py-6 sm:px-8 sm:py-8">
           {view === 'settings' ? (
             <SettingsPage
               section={settingsSection}
+              settings={snapshot.settings}
+              onCloseBehaviorChange={(behavior) => void setCloseBehavior(behavior)}
               onSectionChange={setSettingsSection}
               providers={snapshot.providers}
               tools={snapshot.tools}

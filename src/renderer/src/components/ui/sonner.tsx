@@ -1,4 +1,5 @@
 import { Toaster as Sonner, type ToasterProps } from 'sonner'
+import { useTheme } from '@renderer/components/ThemeProvider'
 import {
   CircleCheckIcon,
   InfoIcon,
@@ -8,9 +9,11 @@ import {
 } from 'lucide-react'
 
 const Toaster = ({ ...props }: ToasterProps): React.JSX.Element => {
+  const { theme } = useTheme()
+
   return (
     <Sonner
-      theme="light"
+      theme={theme}
       className="toaster group"
       position="bottom-right"
       offset={24}

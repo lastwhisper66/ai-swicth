@@ -87,7 +87,7 @@ export function ProvidersPage({
                   </EmptyHeader>
                 </Empty>
               ) : (
-                <div className="grid gap-4 xl:grid-cols-2">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,24rem),1fr))] gap-4">
                   {toolProviders.map((provider) => (
                     <ProviderCard
                       key={provider.id}

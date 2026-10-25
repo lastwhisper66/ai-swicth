@@ -44,6 +44,7 @@ import {
 } from '@renderer/components/ui/item'
 import { Spinner } from '@renderer/components/ui/spinner'
 import { ConfigPreview } from './ConfigPreview'
+import { InstallationBadge, ToolInstallationStatus } from './ToolInstallationStatus'
 
 interface SettingsBackupsProps {
   section: 'paths' | 'backups'
@@ -82,7 +83,7 @@ export function SettingsBackups({
           <div>
             <h2 className="text-base font-semibold">配置路径</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              管理配置目录、查看当前配置，或使用系统默认程序打开文件。
+              检查工具安装状态并管理配置目录。安装或修复工具后，点击顶部刷新按钮重新检测。
             </p>
           </div>
           <ItemGroup className="gap-0 divide-y overflow-hidden rounded-xl border bg-card">
@@ -161,73 +162,90 @@ function ToolPathEditor({
 }): React.JSX.Element {
   const [path, setPath] = useState(status.directory)
   const [editing, setEditing] = useState(false)
+  const showLocation =
+    status.installation.state === 'installed' ||
+    status.fileState !== 'missing' ||
+    status.pathSource !== 'default' ||
+    editing
 
   return (
     <Item role="listitem" className="grid min-w-0 gap-4 rounded-none border-0 p-4">
       <ItemHeader>
-        <ItemTitle>{toolNames[toolId]}</ItemTitle>
+        <ItemTitle className="flex-wrap">
+          {toolNames[toolId]}
+          <InstallationBadge installation={status.installation} />
+        </ItemTitle>
         <Badge variant="outline">
           {status.pathSource === 'custom'
             ? '自定义路径'
             : status.pathSource === 'environment'
               ? '环境变量'
-              : '默认路径'}
+              : showLocation
+                ? '默认路径'
+                : '默认路径待确认'}
         </Badge>
       </ItemHeader>
-      <div className="grid min-w-0 gap-4 rounded-lg bg-muted/35 p-3">
-        {editing ? (
-          <Field className="min-w-0 gap-2">
-            <FieldLabel htmlFor={`${toolId}-path`}>配置目录</FieldLabel>
-            <Input
-              id={`${toolId}-path`}
-              value={path}
-              onChange={(event) => setPath(event.target.value)}
-              className="font-mono text-xs"
-              disabled={busy}
-              aria-describedby={`${toolId}-path-hint`}
-              autoFocus
-            />
-            <FieldDescription id={`${toolId}-path-hint`}>
-              输入已存在目录的绝对路径，保存后生效。
-            </FieldDescription>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                onClick={() => onSave(toolId, path)}
-                disabled={busy || path === status.directory}
-              >
-                {pending ? <Spinner aria-hidden="true" /> : <Save aria-hidden="true" />}
-                保存路径
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setEditing(false)}
+      <ToolInstallationStatus installation={status.installation} showPath />
+      {showLocation ? (
+        <div className="grid min-w-0 gap-4 rounded-lg bg-muted/35 p-3">
+          {editing ? (
+            <Field className="min-w-0 gap-2">
+              <FieldLabel htmlFor={`${toolId}-path`}>配置目录</FieldLabel>
+              <Input
+                id={`${toolId}-path`}
+                value={path}
+                onChange={(event) => setPath(event.target.value)}
+                className="font-mono text-xs"
                 disabled={busy}
-              >
-                取消
-              </Button>
-            </div>
-          </Field>
-        ) : (
+                aria-describedby={`${toolId}-path-hint`}
+                autoFocus
+              />
+              <FieldDescription id={`${toolId}-path-hint`}>
+                输入已存在目录的绝对路径，保存后生效。
+              </FieldDescription>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  onClick={() => onSave(toolId, path)}
+                  disabled={busy || path === status.directory}
+                >
+                  {pending ? <Spinner aria-hidden="true" /> : <Save aria-hidden="true" />}
+                  保存路径
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setEditing(false)}
+                  disabled={busy}
+                >
+                  取消
+                </Button>
+              </div>
+            </Field>
+          ) : (
+            <ConfigLocation
+              label="配置目录"
+              path={status.directory}
+              toolName={toolNames[toolId]}
+              target="directory"
+              busy={busy}
+              onOpen={() => onOpenLocation({ toolId, target: 'directory' })}
+            />
+          )}
           <ConfigLocation
-            label="配置目录"
-            path={status.directory}
+            label="配置文件"
+            path={status.path}
             toolName={toolNames[toolId]}
-            target="directory"
-            busy={busy}
-            onOpen={() => onOpenLocation({ toolId, target: 'directory' })}
+            target="config"
+            busy={busy || status.fileState === 'missing'}
+            onOpen={() => onOpenLocation({ toolId, target: 'config' })}
           />
-        )}
-        <ConfigLocation
-          label="配置文件"
-          path={status.path}
-          toolName={toolNames[toolId]}
-          target="config"
-          busy={busy}
-          onOpen={() => onOpenLocation({ toolId, target: 'config' })}
-        />
-      </div>
+        </div>
+      ) : (
+        <p className="rounded-lg bg-muted/35 p-3 text-xs leading-5 text-muted-foreground">
+          尚未确认工具安装，暂不展示推测的默认配置路径。请安装后刷新，或手动选择已有配置目录。
+        </p>
+      )}
       <ItemActions className="flex-wrap">
         <Button
           type="button"
@@ -273,7 +291,13 @@ function ToolPathEditor({
         <p className="text-xs leading-5 wrap-anywhere text-muted-foreground" role="status">
           {status.statusMessage}
         </p>
-        <ConfigPreview key={status.path} input={{ toolId }} disabled={busy} />
+        {showLocation && (
+          <ConfigPreview
+            key={status.path}
+            input={{ toolId }}
+            disabled={busy || status.fileState === 'missing'}
+          />
+        )}
       </div>
     </Item>
   )

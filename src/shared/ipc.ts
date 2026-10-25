@@ -1,6 +1,8 @@
 export const IPC_CHANNELS = {
   getAppInfo: 'app:get-info',
   getSnapshot: 'app:get-snapshot',
+  setAppSettings: 'app:set-settings',
+  setNativeTheme: 'app:set-native-theme',
   createProvider: 'providers:create',
   updateProvider: 'providers:update',
   deleteProvider: 'providers:delete',
@@ -24,6 +26,18 @@ export type ToolModels = Partial<Record<ToolId, string>>
 export interface AppInfo {
   name: string
   version: string
+}
+
+export type CloseBehavior = 'tray' | 'quit'
+
+export type AppTheme = 'system' | 'light' | 'dark'
+
+export interface SetNativeThemeInput {
+  theme: AppTheme
+}
+
+export interface AppSettings {
+  closeBehavior: CloseBehavior
 }
 
 export interface ProviderSummary {
@@ -69,8 +83,16 @@ export interface DeleteProviderInput {
 export type ToolPathSource = 'default' | 'environment' | 'custom'
 export type ToolFileState = 'ready' | 'missing' | 'invalid' | 'unreadable'
 
+export interface ToolInstallation {
+  state: 'installed' | 'not-detected' | 'unavailable'
+  version: string | null
+  executablePath: string | null
+  message: string
+}
+
 export interface ToolStatus {
   toolId: ToolId
+  installation: ToolInstallation
   path: string
   directory: string
   pathSource: ToolPathSource
@@ -129,6 +151,7 @@ export interface BackupSummary {
 
 export interface AppSnapshot {
   appInfo: AppInfo
+  settings: AppSettings
   providers: ProviderSummary[]
   tools: Record<ToolId, ToolStatus>
   backups: BackupSummary[]
@@ -212,6 +235,8 @@ export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: ApiError
 export interface DesktopApi {
   getAppInfo: () => Promise<AppInfo>
   getSnapshot: () => Promise<ApiResult<AppSnapshot>>
+  setAppSettings: (input: AppSettings) => Promise<ApiResult<AppSnapshot>>
+  setNativeTheme: (input: SetNativeThemeInput) => Promise<ApiResult<void>>
   createProvider: (input: CreateProviderInput) => Promise<ApiResult<AppSnapshot>>
   updateProvider: (input: UpdateProviderInput) => Promise<ApiResult<AppSnapshot>>
   deleteProvider: (input: DeleteProviderInput) => Promise<ApiResult<AppSnapshot>>

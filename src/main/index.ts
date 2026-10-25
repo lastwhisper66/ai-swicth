@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog, Menu, nativeImage, Tray } from 'electron'
 import { join, resolve } from 'path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -12,6 +12,9 @@ import { CommonConfigStore } from './services/common-config'
 import { PathSettingsStore } from './services/path-settings'
 import { SwitchService } from './services/switch'
 import { ToolStatusService } from './services/tool-status'
+import { AppSettingsStore } from './services/app-settings'
+import { ToolInstallationService } from './services/tool-installation'
+import { toApiError } from './errors'
 import icon from '../../resources/icon.png?asset'
 import windowsIcon from '../../resources/icon.ico?asset'
 
@@ -24,21 +27,37 @@ const rendererUrl =
     ? new URL(process.env['ELECTRON_RENDERER_URL']).href
     : pathToFileURL(join(__dirname, '../renderer/index.html')).href
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
+const appSettings = new AppSettingsStore(join(app.getPath('userData'), 'preferences.v1.json'))
+let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+let isQuitting = false
+let isInitialized = false
 
 if (!hasSingleInstanceLock) {
   app.quit()
 }
 
-app.on('second-instance', () => {
-  const mainWindow = BrowserWindow.getAllWindows()[0]
-  if (!mainWindow) return
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (isInitialized && !isQuitting) createWindow()
+    return
+  }
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
+}
+
+app.on('second-instance', showMainWindow)
+app.on('before-quit', () => {
+  isQuitting = true
+})
+app.on('will-quit', () => {
+  tray?.destroy()
+  tray = null
 })
 
 function createWindow(): void {
-  const mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     width: 1080,
     height: 760,
     minWidth: 720,
@@ -55,19 +74,53 @@ function createWindow(): void {
     }
   })
 
-  mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
+  mainWindow = window
+  window.on('ready-to-show', () => {
+    window.show()
   })
 
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  mainWindow.webContents.on('will-navigate', (event) => {
+  window.on('close', (event) => {
+    if (isQuitting) return
+    event.preventDefault()
+    if (appSettings.get().closeBehavior === 'tray' && tray && !tray.isDestroyed()) {
+      window.hide()
+    } else {
+      app.quit()
+    }
+  })
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null
+  })
+
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  window.webContents.on('will-navigate', (event) => {
     event.preventDefault()
   })
 
-  void mainWindow.loadURL(rendererUrl)
+  void window.loadURL(rendererUrl)
 }
 
-app.whenReady().then(() => {
+function createTray(): void {
+  try {
+    const trayIcon =
+      process.platform === 'win32'
+        ? windowsIcon
+        : nativeImage.createFromPath(icon).resize({ width: 16, height: 16 })
+    tray = new Tray(trayIcon)
+    tray.setToolTip('AI Switch · 点击打开窗口')
+    tray.setContextMenu(
+      Menu.buildFromTemplate([{ label: '退出应用程序', click: () => app.quit() }])
+    )
+    tray.on('click', showMainWindow)
+    tray.on('double-click', showMainWindow)
+  } catch {
+    tray?.destroy()
+    tray = null
+    dialog.showErrorBox('系统托盘不可用', '无法创建系统托盘图标，本次关闭窗口将直接退出应用程序。')
+  }
+}
+
+app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return
   electronApp.setAppUserModelId('com.lastwhisper.ai-switch')
 
@@ -83,6 +136,11 @@ app.whenReady().then(() => {
   })
 
   const userDataPath = app.getPath('userData')
+  try {
+    await appSettings.load()
+  } catch (error) {
+    dialog.showErrorBox('无法读取应用设置', toApiError(error).message)
+  }
   const providerStore = new ProviderStore(join(userDataPath, 'providers.v1.json'))
   const pathSettings = new PathSettingsStore(join(userDataPath, 'settings.v1.json'))
   const commonConfigs = new CommonConfigStore(userDataPath)
@@ -91,7 +149,12 @@ app.whenReady().then(() => {
     'claude-code': new ClaudeCodeAdapter(),
     codex: new CodexAdapter()
   }
-  const toolStatusService = new ToolStatusService(providerStore, pathSettings, adapters)
+  const toolStatusService = new ToolStatusService(
+    providerStore,
+    pathSettings,
+    adapters,
+    new ToolInstallationService()
+  )
   const switchService = new SwitchService(
     providerStore,
     pathSettings,
@@ -104,18 +167,17 @@ app.whenReady().then(() => {
     pathSettings,
     backupService,
     switchService,
-    toolStatusService
+    toolStatusService,
+    appSettings
   )
   const unregisterIpc = registerAppIpc(rendererUrl, controller)
   app.once('before-quit', unregisterIpc)
 
-  createWindow()
+  createTray()
+  isInitialized = true
+  if (!mainWindow) createWindow()
 
-  app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
+  app.on('activate', showMainWindow)
 })
 
 // Quit when all windows are closed, except on macOS. There, it's common

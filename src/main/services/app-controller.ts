@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import type {
   AppSnapshot,
+  AppSettings,
   ApplyProviderInput,
   ApplyResult,
   CreateProviderInput,
@@ -25,6 +26,7 @@ import type { PathSettingsStore } from './path-settings'
 import type { SwitchService } from './switch'
 import type { ToolStatusService } from './tool-status'
 import { openToolLocation } from './tool-location'
+import type { AppSettingsStore } from './app-settings'
 
 export class AppController {
   private mutationLock: Promise<void> = Promise.resolve()
@@ -34,21 +36,30 @@ export class AppController {
     private readonly pathSettings: PathSettingsStore,
     private readonly backupService: BackupService,
     private readonly switchService: SwitchService,
-    private readonly toolStatusService: ToolStatusService
+    private readonly toolStatusService: ToolStatusService,
+    private readonly appSettings: AppSettingsStore
   ) {}
 
-  async getSnapshot(): Promise<AppSnapshot> {
+  async getSnapshot(refreshInstallations = false): Promise<AppSnapshot> {
     const [providers, tools, backups] = await Promise.all([
       this.providerStore.list(),
-      this.toolStatusService.getAll(),
+      this.toolStatusService.getAll(refreshInstallations),
       this.backupService.list()
     ])
     return {
       appInfo: { name: app.getName(), version: app.getVersion() },
+      settings: this.appSettings.get(),
       providers,
       tools,
       backups
     }
+  }
+
+  async setAppSettings(input: AppSettings): Promise<AppSnapshot> {
+    return this.withMutation(async () => {
+      await this.appSettings.set(input)
+      return this.getSnapshot()
+    })
   }
 
   async createProvider(input: CreateProviderInput): Promise<AppSnapshot> {

@@ -13,6 +13,7 @@ import {
   EmptyTitle
 } from '@renderer/components/ui/empty'
 import { ProviderCard } from './ProviderCard'
+import { InstallationBadge, ToolInstallationStatus } from './ToolInstallationStatus'
 
 interface ToolConfigPageProps {
   toolId: ToolId
@@ -62,9 +63,13 @@ export function ToolConfigPage({
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <CardTitle className="text-lg">{details.name}</CardTitle>
+                <InstallationBadge installation={status.installation} />
                 <StatusBadge status={status} />
               </div>
               <p className="mt-1 text-sm text-muted-foreground">{details.description}</p>
+              <div className="mt-2">
+                <ToolInstallationStatus installation={status.installation} />
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -113,7 +118,7 @@ export function ToolConfigPage({
           </Empty>
         ) : (
           <ul
-            className="grid list-none gap-4 p-0 md:grid-cols-2"
+            className="grid list-none grid-cols-[repeat(auto-fill,minmax(min(100%,24rem),1fr))] gap-4 p-0"
             aria-label={`${details.name} 供应商`}
           >
             {compatibleProviders.map((provider) => (
@@ -161,10 +166,12 @@ function InfoItem({
 
 function StatusBadge({ status }: { status: ToolStatus }): React.JSX.Element {
   if (status.fileState === 'invalid' || status.fileState === 'unreadable') {
-    return <Badge variant="destructive">需处理</Badge>
+    return <Badge variant="destructive">配置需处理</Badge>
   }
   if (status.currentProviderId) {
-    return <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">已匹配</Badge>
+    return <Badge variant="secondary">配置已匹配</Badge>
   }
-  return <Badge variant="outline">{status.fileState === 'missing' ? '未创建' : '未匹配'}</Badge>
+  return (
+    <Badge variant="outline">{status.fileState === 'missing' ? '配置未创建' : '配置未匹配'}</Badge>
+  )
 }

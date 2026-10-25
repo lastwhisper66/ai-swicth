@@ -1,7 +1,9 @@
-import { Database, FileCog, HardDrive, SlidersHorizontal } from 'lucide-react'
+import { Database, FileCog, HardDrive, Settings, SlidersHorizontal } from 'lucide-react'
 import type {
   AppSnapshot,
+  AppSettings,
   BackupSummary,
+  CloseBehavior,
   OpenToolLocationInput,
   ProviderSummary,
   ToolId,
@@ -11,11 +13,14 @@ import { Button } from '@renderer/components/ui/button'
 import { ProvidersPage } from './ProvidersPage'
 import { SettingsBackups } from './SettingsBackups'
 import { CommonConfigPage } from './CommonConfigPage'
+import { GeneralSettings } from './GeneralSettings'
 
-export type SettingsSection = 'providers' | 'common' | 'paths' | 'backups'
+export type SettingsSection = 'general' | 'providers' | 'common' | 'paths' | 'backups'
 
 interface SettingsPageProps {
   section: SettingsSection
+  settings: AppSettings
+  onCloseBehaviorChange: (behavior: CloseBehavior) => void
   onSectionChange: (section: SettingsSection) => void
   providers: ProviderSummary[]
   tools: Record<ToolId, ToolStatus>
@@ -43,6 +48,7 @@ const items: Array<{
   description: string
   Icon: typeof Database
 }> = [
+  { id: 'general', label: '应用设置', description: '设置关闭窗口后的行为', Icon: Settings },
   {
     id: 'providers',
     label: '供应商设置',
@@ -61,6 +67,8 @@ const items: Array<{
 
 export function SettingsPage({
   section,
+  settings,
+  onCloseBehaviorChange,
   onSectionChange,
   providers,
   tools,
@@ -111,7 +119,13 @@ export function SettingsPage({
       </aside>
 
       <section className="min-w-0">
-        {section === 'providers' ? (
+        {section === 'general' ? (
+          <GeneralSettings
+            settings={settings}
+            busy={busy}
+            onCloseBehaviorChange={onCloseBehaviorChange}
+          />
+        ) : section === 'providers' ? (
           (providerEditor ?? (
             <ProvidersPage
               busy={busy}

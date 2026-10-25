@@ -5,21 +5,29 @@ import { AppError, isFileSystemError } from '../errors'
 import type { ProviderStore, ResolvedProvider } from '../providers/store'
 import { readOptionalText } from '../utils/files'
 import type { PathSettingsStore } from './path-settings'
+import type { ToolInstallationService } from './tool-installation'
 
 export class ToolStatusService {
   constructor(
     private readonly providerStore: ProviderStore,
     private readonly pathSettings: PathSettingsStore,
-    private readonly adapters: Record<ToolId, ToolAdapter>
+    private readonly adapters: Record<ToolId, ToolAdapter>,
+    private readonly installations: ToolInstallationService
   ) {}
 
-  async getAll(): Promise<Record<ToolId, ToolStatus>> {
-    const [claudeCode, codex] = await Promise.all([this.get('claude-code'), this.get('codex')])
+  async getAll(refreshInstallations = false): Promise<Record<ToolId, ToolStatus>> {
+    const [claudeCode, codex] = await Promise.all([
+      this.get('claude-code', refreshInstallations),
+      this.get('codex', refreshInstallations)
+    ])
     return { 'claude-code': claudeCode, codex }
   }
 
-  async get(toolId: ToolId): Promise<ToolStatus> {
-    const resolvedPath = await this.pathSettings.get(toolId)
+  async get(toolId: ToolId, refreshInstallations = false): Promise<ToolStatus> {
+    const [resolvedPath, installation] = await Promise.all([
+      this.pathSettings.get(toolId),
+      this.installations.get(toolId, refreshInstallations)
+    ])
     let content: string | null
 
     try {
@@ -28,6 +36,7 @@ export class ToolStatusService {
       if (isFileSystemError(error) && (error.code === 'EACCES' || error.code === 'EPERM')) {
         return {
           toolId,
+          installation,
           path: resolvedPath.path,
           directory: resolvedPath.directory,
           pathSource: resolvedPath.source,
@@ -47,11 +56,15 @@ export class ToolStatusService {
     if (content === null) {
       return {
         toolId,
+        installation,
         path: resolvedPath.path,
         directory: resolvedPath.directory,
         pathSource: resolvedPath.source,
         fileState: 'missing',
-        statusMessage: '配置文件尚不存在，首次应用时将创建。',
+        statusMessage:
+          installation.state === 'installed'
+            ? '工具已安装，配置文件尚不存在；首次应用时将创建。'
+            : '配置文件尚不存在。此路径仅为预期配置位置，不能据此判断工具已安装。',
         currentProviderId: null,
         currentProviderName: null,
         isExternalConfig: false,
@@ -70,6 +83,7 @@ export class ToolStatusService {
 
       return {
         toolId,
+        installation,
         path: resolvedPath.path,
         directory: resolvedPath.directory,
         pathSource: resolvedPath.source,
@@ -91,6 +105,7 @@ export class ToolStatusService {
       if (error instanceof AppError && error.code === 'MALFORMED_CONFIG') {
         return {
           toolId,
+          installation,
           path: resolvedPath.path,
           directory: resolvedPath.directory,
           pathSource: resolvedPath.source,
