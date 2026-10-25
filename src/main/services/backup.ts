@@ -6,6 +6,7 @@ import { TOOL_IDS } from '@shared/ipc'
 import { AppError } from '../errors'
 import { hashContent, readOptionalText, writeTextAtomic } from '../utils/files'
 import type { CommonConfigStore } from './common-config'
+import type { ManagedStateStore } from './managed-state'
 
 const BACKUP_VERSION = 1
 const MAX_BACKUPS_PER_TOOL = 20
@@ -48,7 +49,8 @@ export class BackupService {
 
   constructor(
     private readonly rootPath: string,
-    private readonly commonConfigs: CommonConfigStore
+    private readonly commonConfigs: CommonConfigStore,
+    private readonly managedStates: ManagedStateStore
   ) {}
 
   async list(): Promise<BackupSummary[]> {
@@ -62,12 +64,8 @@ export class BackupService {
 
   async create(input: CreateBackupInput): Promise<BackupSummary> {
     return this.withLock(async () => {
-      if (
-        input.additionalFiles?.some(
-          (file) => file.path !== this.commonConfigs.getPath(input.toolId)
-        )
-      ) {
-        throw new AppError('INVALID_INPUT', '备份仅支持工具配置及对应的共通模板。')
+      if (input.additionalFiles?.some((file) => !this.isRelatedPath(input.toolId, file.path))) {
+        throw new AppError('INVALID_INPUT', '备份仅支持工具配置、对应共通模板和接管状态。')
       }
       const document = await this.loadIndex()
       const id = randomUUID()
@@ -154,8 +152,8 @@ export class BackupService {
 
   /** Older multi-file backups may include files the application no longer manages. */
   private getRestorableRecord(record: BackupRecord): BackupRecord {
-    const additionalFiles = (record.additionalFiles ?? []).filter(
-      (file) => file.path === this.commonConfigs.getPath(record.toolId)
+    const additionalFiles = (record.additionalFiles ?? []).filter((file) =>
+      this.isRelatedPath(record.toolId, file.path)
     )
     return { ...record, additionalFiles, relatedPaths: additionalFiles.map((file) => file.path) }
   }
@@ -200,6 +198,12 @@ export class BackupService {
 
   private getIndexPath(): string {
     return join(this.rootPath, 'index.v1.json')
+  }
+
+  private isRelatedPath(toolId: ToolId, path: string): boolean {
+    return (
+      path === this.commonConfigs.getPath(toolId) || path === this.managedStates.getPath(toolId)
+    )
   }
 
   private getPayloadPath(record: Pick<BackupRecord, 'id' | 'toolId'>): string {

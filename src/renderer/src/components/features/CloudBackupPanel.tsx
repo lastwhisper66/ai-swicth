@@ -15,7 +15,6 @@ import {
   AlertDialogTrigger
 } from '@renderer/components/ui/alert-dialog'
 import { Button } from '@renderer/components/ui/button'
-import { Checkbox } from '@renderer/components/ui/checkbox'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@renderer/components/ui/field'
 import { Input } from '@renderer/components/ui/input'
 import {
@@ -26,6 +25,7 @@ import {
   SelectValue
 } from '@renderer/components/ui/select'
 import { Spinner } from '@renderer/components/ui/spinner'
+import { ConfigurationCheckbox } from './ConfigurationCheckbox'
 
 interface CloudBackupPanelProps {
   settings: CloudBackupSettings
@@ -116,21 +116,17 @@ export function CloudBackupPanel({
       </div>
 
       <FieldGroup>
-        <label className="flex items-start gap-3 rounded-lg border p-3">
-          <Checkbox
-            checked={enabled}
-            onCheckedChange={(value) => setEnabled(value === true)}
-            disabled={busy}
-          />
-          <span>
-            <span className="block text-sm font-medium">启用云端备份</span>
-            <span className="mt-1 block text-xs leading-5 text-muted-foreground">
-              关闭后不会执行测试、上传或恢复；本地备份仍按原流程工作。
-            </span>
-          </span>
-        </label>
+        <ConfigurationCheckbox
+          className="rounded-lg border p-3"
+          id="cloud-backup-enabled"
+          label="启用云端备份"
+          hint="关闭后不会执行测试、上传或恢复；本地备份仍按原流程工作。"
+          checked={enabled}
+          onCheckedChange={(value) => setEnabled(value === true)}
+          disabled={busy}
+        />
 
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-4">
           <Field>
             <FieldLabel htmlFor="cloud-endpoint">S3 端点（可选）</FieldLabel>
             <Input
@@ -230,14 +226,14 @@ export function CloudBackupPanel({
               </Button>
             </div>
             {settings.hasSecret && (
-              <label className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                <Checkbox
-                  checked={clearSecret}
-                  onCheckedChange={(value) => setClearSecret(value === true)}
-                  disabled={busy || secretAccessKey.length > 0}
-                />
-                清除已保存的 Secret Key
-              </label>
+              <ConfigurationCheckbox
+                className="mt-1"
+                id="cloud-clear-secret"
+                label="清除已保存的 Secret Key"
+                checked={clearSecret}
+                onCheckedChange={(value) => setClearSecret(value === true)}
+                disabled={busy || secretAccessKey.length > 0}
+              />
             )}
           </Field>
         </div>

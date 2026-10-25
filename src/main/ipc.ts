@@ -11,19 +11,21 @@ import {
   type ApplyProviderInput,
   type CreateProviderInput,
   type CommonConfigInput,
+  type MigrateCommonConfigInput,
   type SaveCommonConfigInput,
   type PreviewConfigInput,
   type DeleteProviderInput,
   type PickToolPathInput,
   type OpenToolLocationInput,
   type ResetToolPathInput,
+  type RevealProviderApiKeyInput,
   type RestoreBackupInput,
   type SetNativeThemeInput,
   type SetToolPathInput,
   type ToolId,
-  type ToolModels,
   type UpdateProviderInput
 } from '@shared/ipc'
+import type { HeaderInput, ProviderConfigurations } from '@shared/configuration'
 import { AppError, toApiError } from './errors'
 import type { AppController } from './services/app-controller'
 
@@ -85,6 +87,12 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
   registerBusinessHandler(IPC_CHANNELS.updateProvider, rendererUrl, parseUpdateProvider, (input) =>
     controller.updateProvider(input)
   )
+  registerBusinessHandler(
+    IPC_CHANNELS.revealProviderApiKey,
+    rendererUrl,
+    parseRevealProviderApiKey,
+    (input) => controller.revealProviderApiKey(input)
+  )
   registerBusinessHandler(IPC_CHANNELS.deleteProvider, rendererUrl, parseDeleteProvider, (input) =>
     controller.deleteProvider(input)
   )
@@ -133,6 +141,12 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
   )
   registerBusinessHandler(IPC_CHANNELS.previewConfig, rendererUrl, parsePreviewConfig, (input) =>
     controller.previewConfig(input)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.migrateCommonConfig,
+    rendererUrl,
+    parseMigrateCommonConfig,
+    (input) => controller.migrateCommonConfig(input)
   )
 
   return () => {
@@ -183,7 +197,7 @@ function parseCreateProvider(args: unknown[]): CreateProviderInput {
     baseUrl: expectString(input.baseUrl),
     apiKey: expectString(input.apiKey),
     tools: expectTools(input.tools),
-    models: expectModels(input.models)
+    configurations: expectConfigurations(input.configurations)
   }
 }
 
@@ -249,11 +263,16 @@ function parseUpdateProvider(args: unknown[]): UpdateProviderInput {
     apiKey:
       mode === 'keep' ? { mode: 'keep' } : { mode: 'replace', value: expectString(apiKey.value) },
     tools: expectTools(input.tools),
-    models: expectModels(input.models)
+    configurations: expectConfigurations(input.configurations)
   }
 }
 
 function parseDeleteProvider(args: unknown[]): DeleteProviderInput {
+  const input = expectRecordArgument(args)
+  return { id: expectIdentifier(input.id) }
+}
+
+function parseRevealProviderApiKey(args: unknown[]): RevealProviderApiKeyInput {
   const input = expectRecordArgument(args)
   return { id: expectIdentifier(input.id) }
 }
@@ -283,7 +302,8 @@ function parseApplyProvider(args: unknown[]): ApplyProviderInput {
   const input = expectRecordArgument(args)
   return {
     toolId: expectToolId(input.toolId),
-    providerId: expectIdentifier(input.providerId)
+    providerId: expectIdentifier(input.providerId),
+    ...(input.modelId === undefined ? {} : { modelId: expectIdentifier(input.modelId) })
   }
 }
 
@@ -319,6 +339,7 @@ function parsePreviewConfig(args: unknown[]): PreviewConfigInput {
   const draft = input.draft === undefined ? undefined : expectRecord(input.draft)
   return {
     toolId: expectToolId(input.toolId),
+    ...(input.modelId === undefined ? {} : { modelId: expectIdentifier(input.modelId) }),
     ...(input.providerId === undefined ? {} : { providerId: expectIdentifier(input.providerId) }),
     ...(draft === undefined
       ? {}
@@ -364,14 +385,20 @@ function expectTools(value: unknown): ToolId[] {
   return value.map(expectToolId)
 }
 
-function expectModels(value: unknown): ToolModels {
-  const input = expectRecord(value)
-  const models: ToolModels = {}
-  for (const [toolId, model] of Object.entries(input)) {
-    const parsedToolId = expectToolId(toolId)
-    models[parsedToolId] = expectString(model, 200)
+function expectConfigurations(value: unknown): ProviderConfigurations<HeaderInput> {
+  return expectRecord(value) as ProviderConfigurations<HeaderInput>
+}
+
+function parseMigrateCommonConfig(args: unknown[]): MigrateCommonConfigInput {
+  const input = expectRecordArgument(args)
+  const revision = expectString(input.revision, 64)
+  if (!/^[a-f0-9]{64}$/u.test(revision)) throw invalidRequest()
+  return {
+    toolId: expectToolId(input.toolId),
+    providerId: expectIdentifier(input.providerId),
+    modelId: expectIdentifier(input.modelId),
+    revision
   }
-  return models
 }
 
 function invalidRequest(): AppError {

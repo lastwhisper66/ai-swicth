@@ -1,6 +1,19 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle, Download, Save } from 'lucide-react'
-import { TOOL_IDS, type AppSnapshot, type CommonConfig, type ToolId } from '@shared/ipc'
+import {
+  TOOL_IDS,
+  type AppSnapshot,
+  type CommonConfig,
+  type ToolId,
+  type ProviderSummary
+} from '@shared/ipc'
+import {
+  parseConfiguration,
+  serializeConfiguration,
+  type ConfigObject
+} from '@shared/configuration'
+import { CommonOptionsForm } from './CommonOptionsForm'
+import { ConfigurationSelect } from './ConfigurationSelect'
 import { ToolIcon } from '@renderer/components/ToolIcon'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import {
@@ -24,10 +37,12 @@ import { Textarea } from '@renderer/components/ui/textarea'
 
 export function CommonConfigPage({
   busy,
+  providers,
   onPendingChange,
   onSaved
 }: {
   busy: boolean
+  providers: ProviderSummary[]
   onPendingChange: (pending: boolean) => void
   onSaved: (snapshot: AppSnapshot, message: string) => void
 }): React.JSX.Element {
@@ -59,6 +74,7 @@ export function CommonConfigPage({
         <div key={id} hidden={id !== toolId}>
           <CommonConfigEditor
             toolId={id}
+            providers={providers}
             busy={busy}
             onPendingChange={onPendingChange}
             onSaved={onSaved}
@@ -71,11 +87,13 @@ export function CommonConfigPage({
 
 function CommonConfigEditor({
   toolId,
+  providers,
   busy,
   onPendingChange,
   onSaved
 }: {
   toolId: ToolId
+  providers: ProviderSummary[]
   busy: boolean
   onPendingChange: (pending: boolean) => void
   onSaved: (snapshot: AppSnapshot, message: string) => void
@@ -85,8 +103,50 @@ function CommonConfigEditor({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [reload, setReload] = useState(0)
+  const [editorMode, setEditorMode] = useState('form')
+  const [migrationProviderId, setMigrationProviderId] = useState('')
+  const [migrationModelId, setMigrationModelId] = useState('')
   const toolName = toolId === 'codex' ? 'Codex' : 'Claude Code'
   const dirty = configuration !== null && content !== configuration.content
+  let root: ConfigObject | null = null
+  try {
+    root = parseConfiguration(toolId, content)
+  } catch {
+    /* Advanced editor remains available to repair the draft. */
+  }
+  const compatibleProviders = providers.filter((provider) => provider.tools.includes(toolId))
+  const migrationProvider =
+    compatibleProviders.find((provider) => provider.id === migrationProviderId) ??
+    compatibleProviders[0]
+  const migrationConfig = migrationProvider?.configurations[toolId]
+  const migrationModel =
+    migrationConfig?.models.find((model) => model.id === migrationModelId) ??
+    migrationConfig?.models.find((model) => model.id === migrationConfig.defaultModelId)
+
+  async function migrate(): Promise<void> {
+    if (!configuration || !migrationProvider || !migrationModel) return
+    onPendingChange(true)
+    setError(null)
+    try {
+      const result = await window.api.migrateCommonConfig({
+        toolId,
+        providerId: migrationProvider.id,
+        modelId: migrationModel.id,
+        revision: configuration.revision
+      })
+      if (!result.ok) {
+        setError(result.error.message)
+        return
+      }
+      onSaved(result.value, '已将归属字段迁移到所选供应商和模型，目标工具文件尚未修改。')
+      setLoading(true)
+      setReload((value) => value + 1)
+    } catch {
+      setError('迁移失败，请重新读取后重试。')
+    } finally {
+      onPendingChange(false)
+    }
+  }
 
   useEffect(() => {
     let active = true
@@ -207,35 +267,149 @@ function CommonConfigEditor({
           <Spinner aria-label="正在读取共通配置" />
         ) : (
           configuration && (
-            <Field className="min-w-0 gap-3">
-              <FieldLabel htmlFor={`${toolId}-common-content`}>{toolName} 共通配置</FieldLabel>
-              <Textarea
-                id={`${toolId}-common-content`}
-                value={content}
-                onChange={(event) => setContent(event.target.value)}
-                disabled={busy}
-                spellCheck={false}
-                autoCapitalize="none"
-                wrap="off"
-                aria-describedby={`${toolId}-common-description`}
-                className="h-96 resize-y [field-sizing:fixed] font-mono text-xs leading-6"
-              />
-              <FieldDescription id={`${toolId}-common-description`} className="text-xs leading-6">
-                {toolId === 'claude-code'
-                  ? '可管理 permissions、hooks、cleanPeriodDays 和通用 env 等字段；不能包含 model 和供应商环境变量。'
-                  : '可管理审批、沙箱、历史和 MCP 等字段；不能包含 model、model_provider、model_providers，供应商地址和 API Key 统一由 config.toml 中的供应商配置管理。'}
-                <span className="block">
-                  这是完整模板，删除字段会同步从工具配置中删除。保存会立即应用，并保留当前供应商字段。
-                </span>
-                <span className="mt-2 block break-all">本地模板：{configuration.templatePath}</span>
-              </FieldDescription>
-            </Field>
+            <div className="space-y-5">
+              {configuration.conflicts.length > 0 && (
+                <Alert className="space-y-4">
+                  <AlertDescription className="space-y-4">
+                    <p>
+                      旧模板包含属于供应商／模型的字段，请先迁移。仅更新所选记录；请求头不会复制给其他供应商，目标工具文件不会改动。
+                    </p>
+                    <ul className="list-inside list-disc text-xs">
+                      {configuration.conflicts.map((path) => (
+                        <li key={path} className="break-all">
+                          {path}
+                        </li>
+                      ))}
+                    </ul>
+                    {migrationProvider && migrationModel ? (
+                      <>
+                        <ConfigurationSelect
+                          label="迁移到供应商"
+                          value={migrationProvider.id}
+                          choices={compatibleProviders.map((provider) => [
+                            provider.id,
+                            provider.name
+                          ])}
+                          onChange={(id) => {
+                            setMigrationProviderId(id)
+                            setMigrationModelId('')
+                          }}
+                          disabled={busy}
+                        />
+                        <ConfigurationSelect
+                          label="迁移到模型预设"
+                          value={migrationModel.id}
+                          choices={migrationConfig!.models.map((model) => [
+                            model.id,
+                            `${model.name} (${model.model})`
+                          ])}
+                          onChange={setMigrationModelId}
+                          disabled={busy}
+                        />
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button type="button" variant="outline" disabled={busy}>
+                              迁移归属字段
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>
+                                迁移到 {migrationProvider.name} / {migrationModel.name}？
+                              </AlertDialogTitle>
+                              <AlertDialogDescription>
+                                将读取已保存模板，把可映射字段迁移到所选连接和模型，替换其对应选项和请求头，然后从模板移除这些字段。未保存草稿不会参与迁移；其他模型的
+                                目标工具文件不变。Claude 的思考强度统一由共通配置管理。
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>取消</AlertDialogCancel>
+                              <AlertDialogAction onClick={() => void migrate()}>
+                                确认迁移
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </>
+                    ) : (
+                      <p>请先在供应商设置中添加此工具的供应商和模型，再回来迁移。</p>
+                    )}
+                  </AlertDescription>
+                </Alert>
+              )}
+              <Tabs value={editorMode} onValueChange={setEditorMode}>
+                <TabsList aria-label="共通配置编辑方式">
+                  <TabsTrigger value="form" disabled={busy}>
+                    配置表单
+                  </TabsTrigger>
+                  <TabsTrigger value="raw" disabled={busy}>
+                    高级原文
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+              {editorMode === 'form' ? (
+                root ? (
+                  <CommonOptionsForm
+                    key={configuration.revision}
+                    toolId={toolId}
+                    root={root}
+                    onChange={(value) => setContent(serializeConfiguration(toolId, value))}
+                    disabled={busy || configuration.conflicts.length > 0}
+                    installation={configuration.installation}
+                    attributionOriginal={configuration.attributionOriginal}
+                  />
+                ) : (
+                  <Alert variant="destructive">
+                    <AlertDescription>
+                      草稿格式无效，请切换“高级原文”修复后继续。未保存任何内容。
+                    </AlertDescription>
+                  </Alert>
+                )
+              ) : (
+                <Field className="min-w-0 gap-3">
+                  <FieldLabel htmlFor={`${toolId}-common-content`}>{toolName} 共通配置</FieldLabel>
+                  <Textarea
+                    id={`${toolId}-common-content`}
+                    value={content}
+                    onChange={(event) => setContent(event.target.value)}
+                    disabled={busy}
+                    spellCheck={false}
+                    autoCapitalize="none"
+                    wrap="off"
+                    aria-describedby={`${toolId}-common-description`}
+                    className="h-96 resize-y [field-sizing:fixed] font-mono text-xs leading-6"
+                  />
+                  <FieldDescription
+                    id={`${toolId}-common-description`}
+                    className="text-xs leading-6"
+                  >
+                    {toolId === 'claude-code'
+                      ? '共通字段与表单共享同一草稿；保留未知字段，供应商连接、路由与模型选项请在供应商侧设置。'
+                      : '可管理审批、沙箱、历史和 MCP 等字段；不能包含 model、model_provider、model_providers，供应商地址和 API Key 统一由 config.toml 中的供应商配置管理。'}
+                    <span className="block">
+                      删除模板已有字段会同步清除对应覆盖，保留模板之外的无关配置。保存会立即应用，供应商和模型选项保持不变。
+                    </span>
+                    <span className="mt-2 block break-all">
+                      本地模板：{configuration.templatePath}
+                    </span>
+                  </FieldDescription>
+                </Field>
+              )}
+              <p className="text-xs leading-6 break-all text-muted-foreground">
+                本地模板：{configuration.templatePath}
+              </p>
+            </div>
           )
         )}
         <div className="flex justify-end border-t pt-4">
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button type="button" disabled={busy || loading || !configuration}>
+              <Button
+                type="button"
+                disabled={
+                  busy || loading || !configuration || !root || configuration.conflicts.length > 0
+                }
+              >
                 <Save aria-hidden="true" />
                 保存并应用
               </Button>

@@ -7,10 +7,24 @@ import type {
   ConfigPreview,
   PreviewConfigInput,
   SaveCommonConfigInput,
+  MigrateCommonConfigInput,
   RestoreResult,
   ToolId
 } from '@shared/ipc'
 import type { GeneratedToolConfiguration, ToolAdapter } from '../adapters/types'
+import {
+  attributionStatus,
+  CLAUDE_EFFORTS,
+  isObject,
+  nativeModel,
+  parseConfiguration,
+  providerOptionPaths,
+  readField,
+  serializeConfiguration,
+  type ManagedState
+} from '@shared/configuration'
+import { validateCommonVersion } from '../adapters/configuration-policy'
+import { toConfigurationInput, validateConfigurations } from '../providers/configuration-validation'
 import { AppError, isFileSystemError } from '../errors'
 import type { ProviderStore } from '../providers/store'
 import {
@@ -23,6 +37,9 @@ import type { BackupService, CreateBackupInput } from './backup'
 import type { CommonConfigStore } from './common-config'
 import { redactConfiguration } from './config-preview'
 import type { PathSettingsStore } from './path-settings'
+import { ManagedStateStore } from './managed-state'
+import type { ToolInstallationService } from './tool-installation'
+import { migrateConfiguration } from './configuration-migration'
 
 interface ConfigurationWrite extends GeneratedToolConfiguration {
   relatedContents?: Record<string, string>
@@ -36,14 +53,19 @@ export class SwitchService {
     private readonly pathSettings: PathSettingsStore,
     private readonly backupService: BackupService,
     private readonly adapters: Record<ToolId, ToolAdapter>,
-    private readonly commonConfigs: CommonConfigStore
+    private readonly commonConfigs: CommonConfigStore,
+    private readonly managedStates: ManagedStateStore,
+    private readonly installations: ToolInstallationService
   ) {}
 
-  async apply(toolId: ToolId, providerId: string): Promise<ApplyResult> {
+  async apply(toolId: ToolId, providerId: string, modelId?: string): Promise<ApplyResult> {
     return this.withToolLock(toolId, async () => {
       const provider = await this.providerStore.getResolved(providerId)
-      const model = provider.models[toolId]
-      if (!provider.tools.includes(toolId) || !model) {
+      const toolConfiguration = provider.configurations[toolId]
+      const preset = toolConfiguration?.models.find(
+        (model) => model.id === (modelId ?? toolConfiguration.defaultModelId)
+      )
+      if (!provider.tools.includes(toolId) || !toolConfiguration || !preset) {
         throw new AppError(
           'INCOMPATIBLE_PROVIDER',
           `该供应商未配置 ${this.adapters[toolId].displayName} 所需的模型。`
@@ -53,13 +75,20 @@ export class SwitchService {
       const target = await this.pathSettings.get(toolId)
       const adapter = this.adapters[toolId]
       const originalContent = await readTarget(target.path)
+      const statePath = this.managedStates.getPath(toolId)
+      const originalState = await readTarget(statePath)
+      const state = stateForTarget(this.managedStates.decode(originalState), target.path)
+      const installation = await this.installations.get(toolId)
       if (originalContent !== null) adapter.parseCurrent(originalContent)
       const configuration = {
         providerId: provider.id,
         name: provider.name,
         baseUrl: provider.baseUrl,
-        model,
-        apiKey: provider.apiKey
+        model: nativeModel(toolId, preset),
+        apiKey: provider.apiKey,
+        preset,
+        configuration: toolConfiguration,
+        version: installation.version
       }
       const commonPath = this.commonConfigs.getPath(toolId)
       const originalCommon = await readTarget(commonPath)
@@ -68,26 +97,53 @@ export class SwitchService {
         commonContent === null
           ? originalContent
           : adapter.applyCommon(originalContent, commonContent)
-      const generated = adapter.generate(sourceContent, configuration)
+      if (commonContent !== null)
+        validateCommonVersion(
+          toolId,
+          parseConfiguration(toolId, commonContent),
+          installation.version
+        )
+      const generated = adapter.generate(sourceContent, configuration, state.fields)
+      const nextState: ManagedState = {
+        ...state,
+        fields: generated.managedFields ?? [],
+        selection: {
+          providerId,
+          modelId: preset.id,
+          signature: hashContent(adapter.providerSignature(generated.content))
+        }
+      }
+      captureAttribution(toolId, originalContent, commonContent, nextState)
+      const encodedState = this.managedStates.encode(nextState)
       adapter.verify(generated.content, configuration)
       const backupId = await this.writeConfiguration(
         {
           toolId,
           targetPath: target.path,
           content: originalContent,
-          additionalFiles: [{ path: commonPath, content: originalCommon }],
+          additionalFiles: [
+            { path: commonPath, content: originalCommon },
+            { path: statePath, content: originalState }
+          ],
           reason: 'apply',
           providerId: provider.id,
           providerName: provider.name
         },
-        generated,
-        (content) => adapter.verify(content, configuration)
+        { ...generated, relatedContents: { [statePath]: encodedState } },
+        (content, related) => {
+          adapter.verify(content, configuration)
+          if (
+            hashContent(content) !== hashContent(generated.content) ||
+            related[statePath] !== encodedState
+          )
+            throw new AppError('WRITE_FAILED', '模型选项或接管状态读回校验失败。')
+        }
       )
 
       return {
         toolId,
         backupId,
-        message: `已应用 ${provider.name}，请新建或重启 ${adapter.displayName} 会话。`,
+        message: `已应用 ${provider.name} / ${preset.name}，请新建或重启 ${adapter.displayName} 会话。`,
         warnings: generated.warnings,
         restartRequired: true
       }
@@ -95,22 +151,46 @@ export class SwitchService {
   }
 
   async getCommonConfig(input: CommonConfigInput): Promise<CommonConfig> {
-    const { target, content, template } = await this.readConfiguration(input.toolId)
+    const { target, content, template, stateContent } = await this.readConfiguration(input.toolId)
     const saved = this.commonConfigs.decode(template)
     const useSaved = !input.fromCurrent && saved !== null
+    const common = useSaved ? saved : this.adapters[input.toolId].extractCommon(content)
+    const root = parseConfiguration(input.toolId, common)
+    let inheritedEffort = false
+    if (input.toolId === 'claude-code' && root.effortLevel === undefined) {
+      const current = parseConfiguration(
+        input.toolId,
+        this.adapters[input.toolId].extractCommon(content)
+      )
+      if (CLAUDE_EFFORTS.includes(current.effortLevel as never)) {
+        root.effortLevel = current.effortLevel
+        inheritedEffort = true
+      }
+    }
+    const conflicts = providerOptionPaths(input.toolId, root).map((path) => path.join('.'))
+    const state = stateForTarget(this.managedStates.decode(stateContent), target.path)
+    // Conflicting legacy headers are moved server-side; masked editor values can never be saved.
+    if (conflicts.includes('env.ANTHROPIC_CUSTOM_HEADERS') && isObject(root.env))
+      root.env.ANTHROPIC_CUSTOM_HEADERS = '••••••••（迁移时由主进程保留原值）'
     return {
       toolId: input.toolId,
-      content: useSaved ? saved : this.adapters[input.toolId].extractCommon(content),
+      content:
+        inheritedEffort || conflicts.includes('env.ANTHROPIC_CUSTOM_HEADERS')
+          ? serializeConfiguration(input.toolId, root)
+          : common,
       source: useSaved ? 'saved' : 'current',
       templatePath: this.commonConfigs.getPath(input.toolId),
-      revision: configurationRevision(target.path, content, template)
+      revision: configurationRevision(target.path, content, template, stateContent),
+      conflicts,
+      attributionOriginal: state.attribution,
+      installation: await this.installations.get(input.toolId)
     }
   }
 
   async saveCommonConfig(input: SaveCommonConfigInput): Promise<ApplyResult> {
     return this.withToolLock(input.toolId, async () => {
-      const { target, content, template } = await this.readConfiguration(input.toolId)
-      if (configurationRevision(target.path, content, template) !== input.revision) {
+      const { target, content, template, stateContent } = await this.readConfiguration(input.toolId)
+      if (configurationRevision(target.path, content, template, stateContent) !== input.revision) {
         throw new AppError(
           'CONCURRENT_MODIFICATION',
           '配置或目录已在编辑期间发生变化。请重新读取共通配置后再保存。'
@@ -118,26 +198,55 @@ export class SwitchService {
       }
       const adapter = this.adapters[input.toolId]
       adapter.validateCommon(input.content)
+      const installation = await this.installations.get(input.toolId)
+      validateCommonVersion(
+        input.toolId,
+        parseConfiguration(input.toolId, input.content),
+        installation.version
+      )
       const current = adapter.parseCurrent(content)
-      const merged = adapter.applyCommon(content, input.content)
+      const previousCommon = this.commonConfigs.decode(template) ?? adapter.extractCommon(content)
+      if (
+        providerOptionPaths(input.toolId, parseConfiguration(input.toolId, previousCommon)).length
+      )
+        throw new AppError('INVALID_INPUT', '旧共通模板仍包含模型或连接选项，请先迁移归属字段。')
+      const merged = adapter.applyCommon(content, input.content, previousCommon)
       const templatePath = this.commonConfigs.getPath(input.toolId)
       const encoded = this.commonConfigs.encode(input.content)
+      const statePath = this.managedStates.getPath(input.toolId)
+      const state = stateForTarget(this.managedStates.decode(stateContent), target.path)
+      captureAttribution(input.toolId, content, input.content, state)
+      if (
+        input.toolId === 'claude-code' &&
+        attributionStatus(parseConfiguration(input.toolId, input.content)) !== 'hidden'
+      )
+        delete state.attribution
+      const encodedState = this.managedStates.encode(state)
       const backupId = await this.writeConfiguration(
         {
           toolId: input.toolId,
           targetPath: target.path,
           content,
-          additionalFiles: [{ path: templatePath, content: template }],
+          additionalFiles: [
+            { path: templatePath, content: template },
+            { path: statePath, content: stateContent }
+          ],
           reason: 'common',
           providerId: null,
           providerName: null
         },
-        { content: merged, relatedContents: { [templatePath]: encoded }, warnings: [] },
+        {
+          content: merged,
+          relatedContents: { [templatePath]: encoded, [statePath]: encodedState },
+          warnings: []
+        },
         (written, writtenRelated) => {
           if (
             !isDeepStrictEqual(adapter.parseCurrent(written), current) ||
             adapter.extractCommon(written) !== adapter.extractCommon(merged) ||
-            writtenRelated[templatePath] !== encoded
+            writtenRelated[templatePath] !== encoded ||
+            writtenRelated[statePath] !== encodedState ||
+            hashContent(written) !== hashContent(merged)
           ) {
             throw new AppError('WRITE_FAILED', '共通配置写入后校验失败。')
           }
@@ -154,45 +263,47 @@ export class SwitchService {
   }
 
   async previewConfig(input: PreviewConfigInput): Promise<ConfigPreview> {
-    const { target, content, template } = await this.readConfiguration(input.toolId)
+    const { target, content, template, stateContent } = await this.readConfiguration(input.toolId)
     const adapter = this.adapters[input.toolId]
     let previewContent = content
     let apiKey: string | null = null
+    let warnings: string[] = []
     if (input.providerId || input.draft) {
-      const draft = input.draft
-      const provider = input.providerId
-        ? await this.providerStore.getResolved(input.providerId)
-        : draft && 'id' in draft
-          ? await this.providerStore.getResolved(draft.id)
+      const provider = input.draft
+        ? await this.providerStore.resolveDraft(input.draft)
+        : input.providerId
+          ? await this.providerStore.getResolved(input.providerId)
           : null
-      if (
-        (provider && !provider.tools.includes(input.toolId)) ||
-        (draft && !draft.tools.includes(input.toolId))
-      ) {
+      if (!provider || !provider.tools.includes(input.toolId)) {
         throw new AppError('INCOMPATIBLE_PROVIDER', '该供应商不适用于当前工具。')
       }
-      apiKey = draft
-        ? typeof draft.apiKey === 'string'
-          ? draft.apiKey
-          : draft.apiKey.mode === 'replace'
-            ? draft.apiKey.value
-            : (provider?.apiKey ?? '')
-        : (provider?.apiKey ?? '')
-      const model = draft?.models[input.toolId] ?? provider?.models[input.toolId] ?? ''
-      const baseUrl = draft?.baseUrl ?? provider?.baseUrl ?? ''
-      if (!model.trim() || !baseUrl.trim() || !apiKey)
-        throw new AppError('INVALID_INPUT', '请先填写 API 地址、模型和 API Key，再查看完整配置。')
+      apiKey = provider.apiKey
+      const configuration = provider.configurations[input.toolId]
+      const preset = configuration?.models.find(
+        (model) => model.id === (input.modelId ?? configuration.defaultModelId)
+      )
+      if (!configuration || !preset) throw new AppError('INVALID_INPUT', '请先选择已保存的模型。')
       const commonContent = this.commonConfigs.decode(template)
       const sourceContent =
         commonContent === null ? content : adapter.applyCommon(content, commonContent)
-      const generated = adapter.generate(sourceContent, {
-        providerId: provider?.id ?? 'preview',
-        name: draft?.name ?? provider?.name ?? '预览',
-        baseUrl,
-        model,
-        apiKey
-      })
+      const installation = await this.installations.get(input.toolId)
+      const state = stateForTarget(this.managedStates.decode(stateContent), target.path)
+      const generated = adapter.generate(
+        sourceContent,
+        {
+          providerId: provider.id,
+          name: provider.name,
+          baseUrl: provider.baseUrl,
+          model: nativeModel(input.toolId, preset),
+          apiKey,
+          preset,
+          configuration,
+          version: installation.version
+        },
+        state.fields
+      )
       previewContent = generated.content
+      warnings = generated.warnings
     } else {
       apiKey = adapter.parseCurrent(content).apiKey
     }
@@ -206,6 +317,7 @@ export class SwitchService {
     ]
     return {
       mode: input.providerId || input.draft ? 'provider' : 'current',
+      warnings,
       files: previewFiles.map((file) => ({
         ...file,
         content:
@@ -216,15 +328,82 @@ export class SwitchService {
     }
   }
 
+  async migrateCommonConfig(input: MigrateCommonConfigInput): Promise<void> {
+    return this.withToolLock(input.toolId, async () => {
+      const { target, content, template, stateContent } = await this.readConfiguration(input.toolId)
+      if (configurationRevision(target.path, content, template, stateContent) !== input.revision)
+        throw new AppError('CONCURRENT_MODIFICATION', '配置已发生变化，请重新读取后迁移。')
+      if (template === null) throw new AppError('INVALID_INPUT', '只有已保存的旧共通模板需要迁移。')
+      const provider = await this.providerStore.getResolved(input.providerId)
+      const configuration = provider.configurations[input.toolId]
+      if (!configuration)
+        throw new AppError('INCOMPATIBLE_PROVIDER', '请选择适用于此工具的供应商。')
+      const migrated = migrateConfiguration(input.toolId, template, configuration, input.modelId)
+      const configurations = { ...provider.configurations, [input.toolId]: migrated.configuration }
+      validateConfigurations(configurations, provider.tools, {}, true)
+      const previous = await this.providerStore.exportPortable()
+      const commonPath = this.commonConfigs.getPath(input.toolId)
+      const statePath = this.managedStates.getPath(input.toolId)
+      const hashes = hashTargets(target.path, content, {
+        [commonPath]: template,
+        [statePath]: stateContent
+      })
+      await assertTargetsUnchanged(hashes)
+      await this.backupService.create({
+        toolId: input.toolId,
+        targetPath: target.path,
+        content,
+        additionalFiles: [
+          { path: commonPath, content: template },
+          { path: statePath, content: stateContent }
+        ],
+        reason: 'common',
+        providerId: provider.id,
+        providerName: provider.name
+      })
+      await assertTargetsUnchanged(hashes)
+      let templateWritten = false
+      try {
+        await this.providerStore.update({
+          id: provider.id,
+          name: provider.name,
+          baseUrl: provider.baseUrl,
+          tools: provider.tools,
+          apiKey: { mode: 'keep' },
+          configurations: toConfigurationInput(configurations)
+        })
+        if ((await readTarget(this.commonConfigs.getPath(input.toolId))) !== template)
+          throw new AppError('CONCURRENT_MODIFICATION', '共通模板被外部修改，请重新读取。')
+        await writeTextAtomic(commonPath, migrated.content)
+        templateWritten = true
+        if ((await readTarget(commonPath)) !== migrated.content)
+          throw new AppError('WRITE_FAILED', '迁移后的共通模板读回校验失败。')
+      } catch (error) {
+        try {
+          await this.providerStore.importPortable(previous)
+          if (templateWritten) await writeTextAtomic(commonPath, template)
+        } catch {
+          throw new AppError(
+            'ROLLBACK_FAILED',
+            '迁移失败且供应商库回滚未完成，请检查应用数据目录。'
+          )
+        }
+        throw error
+      }
+    })
+  }
+
   private async readConfiguration(toolId: ToolId): Promise<{
     target: Awaited<ReturnType<PathSettingsStore['get']>>
     content: string | null
     template: string | null
+    stateContent: string | null
   }> {
     const target = await this.pathSettings.get(toolId)
     const content = await readTarget(target.path)
     const template = await readTarget(this.commonConfigs.getPath(toolId))
-    return { target, content, template }
+    const stateContent = await readTarget(this.managedStates.getPath(toolId))
+    return { target, content, template, stateContent }
   }
 
   private async writeConfiguration(
@@ -261,6 +440,19 @@ export class SwitchService {
   async restore(backupId: string): Promise<RestoreResult> {
     const payload = await this.backupService.read(backupId)
     const { record, content: restoredContent, additionalContents } = payload
+    const restoredStatePath = this.managedStates.getPath(record.toolId)
+    this.managedStates.decode(additionalContents[restoredStatePath] ?? null)
+    const restoredTemplate = additionalContents[this.commonConfigs.getPath(record.toolId)]
+    if (restoredTemplate !== undefined && restoredTemplate !== null)
+      parseConfiguration(record.toolId, restoredTemplate)
+    // Backups made before ownership tracking must clear newer tracking, too.
+    if (!(record.additionalFiles ?? []).some((file) => file.path === restoredStatePath)) {
+      record.additionalFiles = [
+        ...(record.additionalFiles ?? []),
+        { path: restoredStatePath, originalFileExisted: false, checksum: hashContent(null) }
+      ]
+      additionalContents[restoredStatePath] = null
+    }
 
     return this.withToolLock(record.toolId, async () => {
       const adapter = this.adapters[record.toolId]
@@ -368,9 +560,27 @@ export class SwitchService {
 function configurationRevision(
   path: string,
   content: string | null,
-  template: string | null
+  template: string | null,
+  state: string | null
 ): string {
-  return hashContent(JSON.stringify({ path, content, template }))
+  return hashContent(JSON.stringify({ path, content, template, state }))
+}
+
+function stateForTarget(state: ManagedState | null, path: string): ManagedState {
+  return state?.targetPath === path ? state : { version: 1, targetPath: path, fields: [] }
+}
+
+function captureAttribution(
+  toolId: ToolId,
+  original: string | null,
+  common: string | null,
+  state: ManagedState
+): void {
+  if (toolId !== 'claude-code' || common === null || state.attribution !== undefined) return
+  if (attributionStatus(parseConfiguration(toolId, common)) === 'hidden')
+    state.attribution = structuredClone(
+      readField(parseConfiguration(toolId, original ?? '{}'), ['attribution'])
+    )
 }
 
 function hashTargets(

@@ -153,7 +153,12 @@ export function SettingsPage({
             />
           ))
         ) : section === 'common' ? (
-          <CommonConfigPage busy={busy} onPendingChange={onPendingChange} onSaved={onCommonSaved} />
+          <CommonConfigPage
+            busy={busy}
+            providers={providers}
+            onPendingChange={onPendingChange}
+            onSaved={onCommonSaved}
+          />
         ) : (
           <SettingsBackups
             section={section}

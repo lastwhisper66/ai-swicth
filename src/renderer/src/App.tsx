@@ -183,11 +183,11 @@ function App(): React.JSX.Element {
     }
   }
 
-  async function applyProvider(toolId: ToolId, providerId: string): Promise<void> {
+  async function applyProvider(toolId: ToolId, providerId: string, modelId: string): Promise<void> {
     const key = `apply:${toolId}:${providerId}`
     setPendingKey(key)
     try {
-      const result = await window.api.applyProvider({ toolId, providerId })
+      const result = await window.api.applyProvider({ toolId, providerId, modelId })
       if (!result.ok) return showError(result.error.message)
       adoptSnapshot(result.value.snapshot)
       const warnings = result.value.operation.warnings
@@ -423,6 +423,13 @@ function App(): React.JSX.Element {
                     key={`${providerEditor.toolId}:${providerEditor.provider?.id ?? 'new'}`}
                     provider={providerEditor.provider}
                     toolId={providerEditor.toolId}
+                    currentModelId={
+                      providerEditor.provider?.id ===
+                      snapshot.tools[providerEditor.toolId].currentProviderId
+                        ? snapshot.tools[providerEditor.toolId].currentModelId
+                        : null
+                    }
+                    installation={snapshot.tools[providerEditor.toolId].installation}
                     onCancel={() => setProviderEditor(null)}
                     onPendingChange={(pending) => setPendingKey(pending ? 'provider:save' : null)}
                     onSaved={(nextSnapshot, message) => {
@@ -463,7 +470,9 @@ function App(): React.JSX.Element {
                   ? pendingKey.slice(`apply:${view}:`.length)
                   : null
               }
-              onApply={(toolId, providerId) => void applyProvider(toolId, providerId)}
+              onApply={(toolId, providerId, modelId) =>
+                void applyProvider(toolId, providerId, modelId)
+              }
               onAdd={openProviderEditor}
               onEdit={(provider) => openProviderEditor(view, provider)}
               onDelete={(providerId) => void deleteProvider(providerId)}

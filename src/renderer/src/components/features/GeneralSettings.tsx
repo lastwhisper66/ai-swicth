@@ -38,20 +38,20 @@ export function GeneralSettings({
               aria-label="关闭窗口后的行为"
             >
               <Field orientation="horizontal" className="rounded-lg border p-4">
-                <RadioGroupItem value="tray" id="close-to-tray" />
-                <FieldContent>
+                <FieldContent className="min-w-0">
                   <FieldLabel htmlFor="close-to-tray">最小化到系统托盘</FieldLabel>
                   <FieldDescription>
                     隐藏窗口并在任务栏通知区域保留图标。点击托盘图标恢复窗口，右键可退出应用程序。
                   </FieldDescription>
                 </FieldContent>
+                <RadioGroupItem value="tray" id="close-to-tray" className="self-center" />
               </Field>
               <Field orientation="horizontal" className="rounded-lg border p-4">
-                <RadioGroupItem value="quit" id="close-to-quit" />
-                <FieldContent>
+                <FieldContent className="min-w-0">
                   <FieldLabel htmlFor="close-to-quit">直接退出应用程序</FieldLabel>
                   <FieldDescription>关闭窗口时结束应用进程，移除托盘图标。</FieldDescription>
                 </FieldContent>
+                <RadioGroupItem value="quit" id="close-to-quit" className="self-center" />
               </Field>
             </RadioGroup>
           </FieldSet>

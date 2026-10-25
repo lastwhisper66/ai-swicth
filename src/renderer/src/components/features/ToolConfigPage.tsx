@@ -12,7 +12,7 @@ import {
   EmptyMedia,
   EmptyTitle
 } from '@renderer/components/ui/empty'
-import { ProviderCard } from './ProviderCard'
+import { ProviderRow } from './ProviderRow'
 import { InstallationBadge, ToolInstallationStatus } from './ToolInstallationStatus'
 
 interface ToolConfigPageProps {
@@ -21,7 +21,7 @@ interface ToolConfigPageProps {
   providers: ProviderSummary[]
   busy: boolean
   pendingProviderId: string | null
-  onApply: (toolId: ToolId, providerId: string) => void
+  onApply: (toolId: ToolId, providerId: string, modelId: string) => void
   onAdd: (toolId: ToolId) => void
   onEdit: (provider: ProviderSummary) => void
   onDelete: (providerId: string) => void
@@ -78,7 +78,17 @@ export function ToolConfigPage({
             label="当前供应商"
             value={status.currentProviderName ?? (status.isExternalConfig ? '外部配置' : '未配置')}
           />
-          <InfoItem label="当前模型" value={status.model ?? '—'} mono />
+          <InfoItem
+            label="当前模型"
+            value={
+              toolId !== 'claude-code' &&
+              status.currentModelName &&
+              status.currentModelName !== status.model
+                ? `${status.currentModelName} (${status.model})`
+                : (status.model ?? '—')
+            }
+            mono
+          />
           <InfoItem label="Base URL" value={status.baseUrl ?? '—'} mono />
           <Alert className="bg-muted/25 sm:col-span-3" role="status">
             <Info aria-hidden="true" />
@@ -118,18 +128,21 @@ export function ToolConfigPage({
           </Empty>
         ) : (
           <ul
-            className="grid list-none grid-cols-[repeat(auto-fill,minmax(min(100%,24rem),1fr))] gap-4 p-0"
+            className="grid list-none grid-cols-1 gap-3 p-0"
             aria-label={`${details.name} 供应商`}
           >
             {compatibleProviders.map((provider) => (
               <li key={provider.id} className="min-w-0">
-                <ProviderCard
+                <ProviderRow
                   provider={provider}
                   toolId={toolId}
                   isCurrent={provider.id === status.currentProviderId}
+                  currentModelId={
+                    provider.id === status.currentProviderId ? status.currentModelId : null
+                  }
                   pending={provider.id === pendingProviderId}
                   busy={busy}
-                  onApply={() => onApply(toolId, provider.id)}
+                  onApply={(modelId) => onApply(toolId, provider.id, modelId)}
                   onEdit={() => onEdit(provider)}
                   onDelete={() => onDelete(provider.id)}
                 />

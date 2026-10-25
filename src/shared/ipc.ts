@@ -1,3 +1,5 @@
+import type { FieldValue, ProviderConfigurations, HeaderInput } from './configuration'
+
 export const IPC_CHANNELS = {
   getAppInfo: 'app:get-info',
   getSnapshot: 'app:get-snapshot',
@@ -10,6 +12,7 @@ export const IPC_CHANNELS = {
   setNativeTheme: 'app:set-native-theme',
   createProvider: 'providers:create',
   updateProvider: 'providers:update',
+  revealProviderApiKey: 'providers:reveal-api-key',
   deleteProvider: 'providers:delete',
   pickToolPath: 'tools:pick-path',
   setToolPath: 'tools:set-path',
@@ -17,6 +20,7 @@ export const IPC_CHANNELS = {
   openToolLocation: 'tools:open-location',
   getCommonConfig: 'config:get-common',
   saveCommonConfig: 'config:save-common',
+  migrateCommonConfig: 'config:migrate-common',
   previewConfig: 'config:preview',
   applyProvider: 'switch:apply',
   restoreBackup: 'backups:restore'
@@ -90,6 +94,7 @@ export interface ProviderSummary {
   baseUrl: string
   tools: ToolId[]
   models: ToolModels
+  configurations: ProviderConfigurations
   hasApiKey: boolean
   maskedApiKey: string
   createdAt: string
@@ -101,7 +106,7 @@ export interface CreateProviderInput {
   baseUrl: string
   apiKey: string
   tools: ToolId[]
-  models: ToolModels
+  configurations: ProviderConfigurations<HeaderInput>
 }
 
 export type ApiKeyUpdate =
@@ -117,10 +122,14 @@ export interface UpdateProviderInput {
   baseUrl: string
   apiKey: ApiKeyUpdate
   tools: ToolId[]
-  models: ToolModels
+  configurations: ProviderConfigurations<HeaderInput>
 }
 
 export interface DeleteProviderInput {
+  id: string
+}
+
+export interface RevealProviderApiKeyInput {
   id: string
 }
 
@@ -144,6 +153,8 @@ export interface ToolStatus {
   statusMessage: string
   currentProviderId: string | null
   currentProviderName: string | null
+  currentModelId: string | null
+  currentModelName: string | null
   isExternalConfig: boolean
   baseUrl: string | null
   model: string | null
@@ -162,6 +173,16 @@ export interface CommonConfig {
   templatePath: string
   source: 'saved' | 'current'
   revision: string
+  conflicts: string[]
+  attributionOriginal?: FieldValue
+  installation: ToolInstallation
+}
+
+export interface MigrateCommonConfigInput {
+  toolId: ToolId
+  providerId: string
+  modelId: string
+  revision: string
 }
 
 export interface SaveCommonConfigInput {
@@ -174,11 +195,13 @@ export interface PreviewConfigInput {
   toolId: ToolId
   providerId?: string
   draft?: CreateProviderInput | UpdateProviderInput
+  modelId?: string
 }
 
 export interface ConfigPreview {
   mode: 'current' | 'provider'
   files: Array<{ path: string; content: string | null; language: 'json' | 'toml' }>
+  warnings: string[]
 }
 
 export interface BackupSummary {
@@ -204,6 +227,7 @@ export interface AppSnapshot {
 export interface ApplyProviderInput {
   toolId: ToolId
   providerId: string
+  modelId?: string
 }
 
 export interface ApplyResult {
@@ -312,6 +336,7 @@ export interface DesktopApi {
   setNativeTheme: (input: SetNativeThemeInput) => Promise<ApiResult<void>>
   createProvider: (input: CreateProviderInput) => Promise<ApiResult<AppSnapshot>>
   updateProvider: (input: UpdateProviderInput) => Promise<ApiResult<AppSnapshot>>
+  revealProviderApiKey: (input: RevealProviderApiKeyInput) => Promise<ApiResult<string>>
   deleteProvider: (input: DeleteProviderInput) => Promise<ApiResult<AppSnapshot>>
   pickToolPath: (input: PickToolPathInput) => Promise<ApiResult<string | null>>
   setToolPath: (input: SetToolPathInput) => Promise<ApiResult<AppSnapshot>>
@@ -321,6 +346,7 @@ export interface DesktopApi {
   saveCommonConfig: (
     input: SaveCommonConfigInput
   ) => Promise<ApiResult<OperationResponse<ApplyResult>>>
+  migrateCommonConfig: (input: MigrateCommonConfigInput) => Promise<ApiResult<AppSnapshot>>
   previewConfig: (input: PreviewConfigInput) => Promise<ApiResult<ConfigPreview>>
   applyProvider: (input: ApplyProviderInput) => Promise<ApiResult<OperationResponse<ApplyResult>>>
   restoreBackup: (input: RestoreBackupInput) => Promise<ApiResult<OperationResponse<RestoreResult>>>

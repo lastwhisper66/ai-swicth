@@ -15,6 +15,7 @@ import { ToolStatusService } from './services/tool-status'
 import { AppSettingsStore } from './services/app-settings'
 import { CloudBackupService } from './services/cloud-backup'
 import { ToolInstallationService } from './services/tool-installation'
+import { ManagedStateStore } from './services/managed-state'
 import { toApiError } from './errors'
 import icon from '../../resources/icon.png?asset'
 import windowsIcon from '../../resources/icon.ico?asset'
@@ -145,8 +146,19 @@ app.whenReady().then(async () => {
   const providerStore = new ProviderStore(join(userDataPath, 'providers.v1.json'))
   const pathSettings = new PathSettingsStore(join(userDataPath, 'settings.v1.json'))
   const commonConfigs = new CommonConfigStore(userDataPath)
-  const backupService = new BackupService(join(userDataPath, 'backups'), commonConfigs)
-  const cloudBackupService = new CloudBackupService(providerStore, commonConfigs, appSettings)
+  const managedStates = new ManagedStateStore(userDataPath)
+  const installations = new ToolInstallationService()
+  const backupService = new BackupService(
+    join(userDataPath, 'backups'),
+    commonConfigs,
+    managedStates
+  )
+  const cloudBackupService = new CloudBackupService(
+    providerStore,
+    commonConfigs,
+    appSettings,
+    managedStates
+  )
   const adapters = {
     'claude-code': new ClaudeCodeAdapter(),
     codex: new CodexAdapter()
@@ -155,14 +167,17 @@ app.whenReady().then(async () => {
     providerStore,
     pathSettings,
     adapters,
-    new ToolInstallationService()
+    installations,
+    managedStates
   )
   const switchService = new SwitchService(
     providerStore,
     pathSettings,
     backupService,
     adapters,
-    commonConfigs
+    commonConfigs,
+    managedStates,
+    installations
   )
   const controller = new AppController(
     providerStore,

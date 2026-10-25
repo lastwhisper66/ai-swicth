@@ -11,6 +11,7 @@ import type {
   CreateProviderInput,
   CommonConfigInput,
   CommonConfig,
+  MigrateCommonConfigInput,
   ConfigPreview,
   SaveCommonConfigInput,
   PreviewConfigInput,
@@ -19,6 +20,7 @@ import type {
   OpenToolLocationInput,
   PickToolPathInput,
   ResetToolPathInput,
+  RevealProviderApiKeyInput,
   RestoreBackupInput,
   RestoreResult,
   SetToolPathInput,
@@ -131,6 +133,10 @@ export class AppController {
     })
   }
 
+  async revealProviderApiKey(input: RevealProviderApiKeyInput): Promise<string> {
+    return this.withMutation(async () => (await this.providerStore.getResolved(input.id)).apiKey)
+  }
+
   async getToolPickerDirectory(input: PickToolPathInput): Promise<string> {
     return this.pathSettings.getPickerDirectory(input.toolId)
   }
@@ -158,7 +164,11 @@ export class AppController {
 
   async applyProvider(input: ApplyProviderInput): Promise<OperationResponse<ApplyResult>> {
     return this.withMutation(async () => {
-      const operation = await this.switchService.apply(input.toolId, input.providerId)
+      const operation = await this.switchService.apply(
+        input.toolId,
+        input.providerId,
+        input.modelId
+      )
       return { operation, snapshot: await this.getSnapshot() }
     })
   }
@@ -172,6 +182,13 @@ export class AppController {
 
   async getCommonConfig(input: CommonConfigInput): Promise<CommonConfig> {
     return this.withMutation(() => this.switchService.getCommonConfig(input))
+  }
+
+  async migrateCommonConfig(input: MigrateCommonConfigInput): Promise<AppSnapshot> {
+    return this.withMutation(async () => {
+      await this.switchService.migrateCommonConfig(input)
+      return this.getSnapshot()
+    })
   }
 
   async previewConfig(input: PreviewConfigInput): Promise<ConfigPreview> {

@@ -1,37 +1,18 @@
 import { randomUUID } from 'node:crypto'
-import type {
-  CreateProviderInput,
-  ProviderSummary,
-  ToolId,
-  ToolModels,
-  UpdateProviderInput
-} from '@shared/ipc'
+import type { CreateProviderInput, ProviderSummary, ToolId, UpdateProviderInput } from '@shared/ipc'
 import { TOOL_IDS } from '@shared/ipc'
+import {
+  hasControlCharacters,
+  isObject,
+  type ProviderConfigurations,
+  type HeaderValue
+} from '@shared/configuration'
 import { AppError } from '../errors'
 import { readOptionalText, writeTextAtomic } from '../utils/files'
+import { validateConfigurations } from './configuration-validation'
+import { maskApiKey } from '../utils/api-key'
 
-const STORAGE_VERSION = 1
-const MASKED_API_KEY = '••••••••'
-
-interface ProviderRecord {
-  id: string
-  name: string
-  baseUrl: string
-  apiKey: string
-  tools: ToolId[]
-  models: ToolModels
-  createdAt: string
-  updatedAt: string
-}
-
-interface ProviderDocument {
-  version: number
-  providers: ProviderRecord[]
-}
-
-export interface ResolvedProvider extends ProviderSummary {
-  apiKey: string
-}
+const STORAGE_VERSION = 2
 
 export interface PortableProvider {
   id: string
@@ -39,160 +20,125 @@ export interface PortableProvider {
   baseUrl: string
   apiKey: string
   tools: ToolId[]
-  models: ToolModels
+  configurations: ProviderConfigurations<HeaderValue>
   createdAt: string
   updatedAt: string
 }
 
-interface ValidatedProviderInput {
-  name: string
-  baseUrl: string
-  apiKey: string | null
-  tools: ToolId[]
-  models: ToolModels
+export type ResolvedProvider = PortableProvider
+interface ProviderDocument {
+  version: number
+  providers: PortableProvider[]
 }
 
 export class ProviderStore {
   constructor(private readonly filePath: string) {}
 
   async list(): Promise<ProviderSummary[]> {
-    const document = await this.load()
-    return document.providers
-      .map((provider) => this.toSummary(provider))
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    return (await this.load()).providers
+      .map(toSummary)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
 
   async create(input: CreateProviderInput): Promise<ProviderSummary> {
-    const validated = validateProviderInput(input)
+    const basic = validateBasic(input)
+    const configurations = validateConfigurations(input.configurations, basic.tools)
+    const apiKey = validateApiKey(input.apiKey)
     const document = await this.load()
-    this.assertUniqueName(document.providers, validated.name, validated.tools)
+    assertUnique(document.providers, basic.name, basic.tools)
     const now = new Date().toISOString()
-    const record: ProviderRecord = {
+    const record = {
       id: randomUUID(),
-      name: validated.name,
-      baseUrl: validated.baseUrl,
-      apiKey: validated.apiKey ?? '',
-      tools: validated.tools,
-      models: validated.models,
+      ...basic,
+      apiKey,
+      configurations,
       createdAt: now,
       updatedAt: now
     }
-
     document.providers.push(record)
     await this.save(document)
-    return this.toSummary(record)
+    return toSummary(record)
   }
 
   async update(input: UpdateProviderInput): Promise<ProviderSummary> {
-    const apiKey = input.apiKey.mode === 'replace' ? input.apiKey.value : null
-    const validated = validateProviderInput({ ...input, apiKey })
     const document = await this.load()
-    const provider = document.providers.find((item) => item.id === input.id)
-
-    if (!provider) {
-      throw new AppError('PROVIDER_NOT_FOUND', '供应商不存在，可能已被删除。')
-    }
-
-    this.assertUniqueName(document.providers, validated.name, validated.tools, provider.id)
-    provider.name = validated.name
-    provider.baseUrl = validated.baseUrl
-    provider.tools = validated.tools
-    provider.models = validated.models
-    provider.updatedAt = new Date().toISOString()
-    if (validated.apiKey !== null) {
-      provider.apiKey = validated.apiKey
-    }
-
+    const record = document.providers.find((item) => item.id === input.id)
+    if (!record) throw new AppError('PROVIDER_NOT_FOUND', '供应商不存在，可能已被删除。')
+    const basic = validateBasic(input)
+    assertUnique(document.providers, basic.name, basic.tools, input.id)
+    const configurations = validateConfigurations(
+      input.configurations,
+      basic.tools,
+      record.configurations
+    )
+    const apiKey = input.apiKey.mode === 'keep' ? record.apiKey : validateApiKey(input.apiKey.value)
+    Object.assign(record, basic, { configurations, apiKey, updatedAt: new Date().toISOString() })
     await this.save(document)
-    return this.toSummary(provider)
+    return toSummary(record)
+  }
+
+  async resolveDraft(input: CreateProviderInput | UpdateProviderInput): Promise<ResolvedProvider> {
+    const previous = 'id' in input ? await this.getResolved(input.id) : null
+    const basic = validateBasic(input)
+    const apiKey =
+      typeof input.apiKey === 'string'
+        ? validateApiKey(input.apiKey)
+        : input.apiKey.mode === 'replace'
+          ? validateApiKey(input.apiKey.value)
+          : (previous?.apiKey ?? '')
+    return {
+      id: previous?.id ?? 'preview',
+      ...basic,
+      apiKey,
+      configurations: validateConfigurations(
+        input.configurations,
+        basic.tools,
+        previous?.configurations
+      ),
+      createdAt: previous?.createdAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }
   }
 
   async delete(id: string): Promise<void> {
     const document = await this.load()
-    const nextProviders = document.providers.filter((provider) => provider.id !== id)
-    if (nextProviders.length === document.providers.length) {
+    const remaining = document.providers.filter((provider) => provider.id !== id)
+    if (remaining.length === document.providers.length)
       throw new AppError('PROVIDER_NOT_FOUND', '供应商不存在，可能已被删除。')
-    }
-
-    document.providers = nextProviders
+    document.providers = remaining
     await this.save(document)
   }
 
   async getResolved(id: string): Promise<ResolvedProvider> {
-    const document = await this.load()
-    const provider = document.providers.find((item) => item.id === id)
-    if (!provider) {
-      throw new AppError('PROVIDER_NOT_FOUND', '供应商不存在，可能已被删除。')
-    }
-
-    return { ...this.toSummary(provider), apiKey: provider.apiKey }
+    const record = (await this.load()).providers.find((item) => item.id === id)
+    if (!record) throw new AppError('PROVIDER_NOT_FOUND', '供应商不存在，可能已被删除。')
+    return record
   }
 
   async listResolved(): Promise<ResolvedProvider[]> {
-    const document = await this.load()
-    return document.providers.map((provider) => ({
-      ...this.toSummary(provider),
-      apiKey: provider.apiKey
-    }))
+    return (await this.load()).providers
   }
-
   async exportPortable(): Promise<PortableProvider[]> {
-    const document = await this.load()
-    return document.providers.map((provider) => ({
-      id: provider.id,
-      name: provider.name,
-      baseUrl: provider.baseUrl,
-      apiKey: provider.apiKey,
-      tools: [...provider.tools],
-      models: { ...provider.models },
-      createdAt: provider.createdAt,
-      updatedAt: provider.updatedAt
-    }))
+    return (await this.load()).providers
   }
 
-  async importPortable(providers: PortableProvider[]): Promise<void> {
-    const records = providers.map((provider) => {
-      const validated = validateProviderInput({
-        ...provider,
-        apiKey: provider.apiKey.length > 0 ? provider.apiKey : null
-      })
-      if (
-        !isUuid(provider.id) ||
-        !isIsoDate(provider.createdAt) ||
-        !isIsoDate(provider.updatedAt)
-      ) {
-        throw new AppError('CLOUD_BACKUP_INVALID', '云端备份中的供应商标识或时间无效。')
-      }
-      return {
-        id: provider.id,
-        name: validated.name,
-        baseUrl: validated.baseUrl,
-        apiKey: validated.apiKey ?? '',
-        tools: validated.tools,
-        models: validated.models,
-        createdAt: provider.createdAt,
-        updatedAt: provider.updatedAt
-      }
-    })
-    const document: ProviderDocument = { version: STORAGE_VERSION, providers: records }
-    if (!isProviderDocument(document)) {
-      throw new AppError('CLOUD_BACKUP_INVALID', '云端备份中的供应商存在重复或无效字段。')
-    }
-    await this.save(document)
+  async importPortable(providers: unknown[]): Promise<void> {
+    await this.save({ version: STORAGE_VERSION, providers: this.validatePortable(providers) })
+  }
+
+  validatePortable(providers: unknown[]): PortableProvider[] {
+    return decodeDocument({ version: STORAGE_VERSION, providers }).providers
   }
 
   private async load(): Promise<ProviderDocument> {
     const content = await readOptionalText(this.filePath)
     if (content === null) return { version: STORAGE_VERSION, providers: [] }
-
     try {
-      const value: unknown = JSON.parse(content)
-      if (!isProviderDocument(value)) throw new Error('Invalid provider document')
-      return value
+      return decodeDocument(JSON.parse(content))
     } catch {
       throw new AppError(
         'STORAGE_CORRUPTED',
-        '供应商数据无法读取。原文件未被修改，请检查应用数据目录。'
+        '供应商数据无法读取或版本不受支持，原文件未修改。请检查应用数据目录。'
       )
     }
   }
@@ -200,184 +146,167 @@ export class ProviderStore {
   private async save(document: ProviderDocument): Promise<void> {
     await writeTextAtomic(this.filePath, `${JSON.stringify(document, null, 2)}\n`, true)
   }
-
-  private toSummary(provider: ProviderRecord): ProviderSummary {
-    return {
-      id: provider.id,
-      name: provider.name,
-      baseUrl: provider.baseUrl,
-      tools: [...provider.tools],
-      models: { ...provider.models },
-      hasApiKey: provider.apiKey.length > 0,
-      maskedApiKey: this.getMaskedApiKey(provider.apiKey),
-      createdAt: provider.createdAt,
-      updatedAt: provider.updatedAt
-    }
-  }
-
-  private getMaskedApiKey(apiKey: string): string {
-    if (apiKey.length >= 18) return `${apiKey.slice(0, 6)}…${apiKey.slice(-6)}`
-    if (apiKey.length >= 12) return `${apiKey.slice(0, 3)}…${apiKey.slice(-4)}`
-    if (apiKey.length >= 6) return `${apiKey.slice(0, 1)}…${apiKey.slice(-2)}`
-    return MASKED_API_KEY
-  }
-
-  private assertUniqueName(
-    providers: ProviderRecord[],
-    name: string,
-    tools: ToolId[],
-    currentId?: string
-  ): void {
-    const duplicate = providers.some(
-      (provider) =>
-        provider.id !== currentId &&
-        provider.name.toLocaleLowerCase() === name.toLocaleLowerCase() &&
-        provider.tools.some((toolId) => tools.includes(toolId))
-    )
-    if (duplicate) {
-      throw new AppError('DUPLICATE_PROVIDER', '此工具中已存在同名供应商。', {
-        name: '请为此工具使用不同的供应商名称。'
-      })
-    }
-  }
 }
 
-function validateProviderInput(
-  input: Omit<CreateProviderInput, 'apiKey'> & { apiKey: string | null }
-): ValidatedProviderInput {
-  const fieldErrors: Record<string, string> = {}
+function decodeDocument(value: unknown): ProviderDocument {
+  if (
+    !isObject(value) ||
+    ![1, STORAGE_VERSION].includes(value.version as number) ||
+    !Array.isArray(value.providers)
+  )
+    throw new Error('Invalid provider document')
+  const providers: PortableProvider[] = []
+  for (const raw of value.providers) {
+    if (!isObject(raw) || !isUuid(raw.id) || !isIsoDate(raw.createdAt) || !isIsoDate(raw.updatedAt))
+      throw new Error('Invalid record')
+    const basic = validateBasic(raw)
+    let configurations = raw.configurations
+    // Deterministic IDs migrate reads without modifying the library or target files.
+    if (configurations === undefined && isObject(raw.models)) {
+      configurations = Object.fromEntries(
+        basic.tools.map((toolId) => {
+          const model = raw.models as Record<string, unknown>
+          const id = `legacy-${raw.id}-${toolId}`
+          return [
+            toolId,
+            {
+              models: [{ id, name: model[toolId], model: model[toolId], options: {} }],
+              defaultModelId: id,
+              headers: []
+            }
+          ]
+        })
+      )
+    }
+    const record: PortableProvider = {
+      id: raw.id,
+      ...basic,
+      apiKey: raw.apiKey === '' ? '' : validateApiKey(raw.apiKey),
+      configurations: validateConfigurations(configurations, basic.tools, {}, true),
+      createdAt: raw.createdAt,
+      updatedAt: raw.updatedAt
+    }
+    if (providers.some((provider) => provider.id === record.id)) throw new Error('Duplicate ID')
+    assertUnique(providers, record.name, record.tools)
+    providers.push(record)
+  }
+  return { version: STORAGE_VERSION, providers }
+}
+
+function validateBasic(
+  input: Record<string, unknown> | CreateProviderInput | UpdateProviderInput
+): { name: string; baseUrl: string; tools: ToolId[] } {
+  const errors: Record<string, string> = {}
   const name = typeof input.name === 'string' ? input.name.trim() : ''
-  const rawBaseUrl = typeof input.baseUrl === 'string' ? input.baseUrl.trim() : ''
-  const apiKey = input.apiKey === null ? null : input.apiKey.trim()
-
-  if (name.length < 1 || name.length > 60) {
-    fieldErrors.name = '名称长度应为 1 到 60 个字符。'
-  }
-
-  const baseUrl = normalizeBaseUrl(rawBaseUrl, fieldErrors)
-  if (apiKey !== null && (apiKey.length < 1 || apiKey.length > 4096 || /[\r\n]/u.test(apiKey))) {
-    fieldErrors.apiKey = '请输入有效的 API Key，且不能包含换行。'
-  }
-
-  const tools = Array.isArray(input.tools)
-    ? [...new Set(input.tools.filter((tool): tool is ToolId => TOOL_IDS.includes(tool as ToolId)))]
-    : []
-  if (tools.length === 0 || tools.length !== input.tools.length) {
-    fieldErrors.tools = '请至少选择一个适用工具。'
-  }
-
-  const models: ToolModels = {}
-  for (const toolId of tools) {
-    const model = typeof input.models?.[toolId] === 'string' ? input.models[toolId]?.trim() : ''
-    if (!model || model.length > 200 || /[\r\n]/u.test(model)) {
-      fieldErrors[`models.${toolId}`] = '请输入有效的模型名称。'
-    } else {
-      models[toolId] = model
-    }
-  }
-
-  if (Object.keys(fieldErrors).length > 0) {
-    throw new AppError('INVALID_INPUT', '供应商信息有误，请检查后重试。', fieldErrors)
-  }
-
-  return { name, baseUrl, apiKey, tools, models }
-}
-
-function normalizeBaseUrl(rawValue: string, fieldErrors: Record<string, string>): string {
+  if (!name || name.length > 60 || hasControlCharacters(name))
+    errors.name = '名称长度应为 1 到 60 个字符且不含控制字符。'
+  const raw = typeof input.baseUrl === 'string' ? input.baseUrl.trim() : ''
+  let baseUrl = raw
   try {
-    if (!rawValue || rawValue.length > 2048 || hasControlCharacters(rawValue)) {
-      throw new Error('Invalid URL')
-    }
-
-    const url = new URL(rawValue)
+    const url = new URL(raw)
     if (
-      (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+      raw.length > 2048 ||
+      hasControlCharacters(raw) ||
+      raw.includes(' ') ||
+      !['http:', 'https:'].includes(url.protocol) ||
       url.username ||
       url.password ||
       url.hash ||
       url.search
-    ) {
+    )
       throw new Error('Invalid URL')
-    }
-
-    return url.toString().replace(/\/+$/u, '')
+    baseUrl = url.toString().replace(/\/+$/u, '')
   } catch {
-    fieldErrors.baseUrl = '请输入不含凭据、查询参数或片段的完整 HTTP(S) 地址。'
-    return rawValue
+    errors.baseUrl = '请输入不含凭据、查询参数或片段的完整 HTTP(S) 地址。'
   }
-}
-
-function hasControlCharacters(value: string): boolean {
-  return Array.from(value).some((character) => {
-    const code = character.charCodeAt(0)
-    return code < 32 || code === 127
-  })
-}
-
-function isProviderDocument(value: unknown): value is ProviderDocument {
-  if (!isRecord(value) || value.version !== STORAGE_VERSION || !Array.isArray(value.providers)) {
-    return false
-  }
-
-  if (!value.providers.every(isProviderRecord)) return false
-  const ids = new Set<string>()
-  const names = new Map<ToolId, Set<string>>(TOOL_IDS.map((toolId) => [toolId, new Set()]))
-  for (const provider of value.providers) {
-    const normalizedName = provider.name.toLocaleLowerCase()
-    if (ids.has(provider.id)) return false
-    ids.add(provider.id)
-    for (const toolId of provider.tools) {
-      const toolNames = names.get(toolId)!
-      if (toolNames.has(normalizedName)) return false
-      toolNames.add(normalizedName)
-    }
-  }
-  return true
-}
-
-function isProviderRecord(value: unknown): value is ProviderRecord {
-  if (!isRecord(value)) return false
-  const tools = value.tools
-  const models = value.models
-  return (
-    isUuid(value.id) &&
-    typeof value.name === 'string' &&
-    value.name.trim().length > 0 &&
-    value.name.length <= 60 &&
-    typeof value.baseUrl === 'string' &&
-    isValidStoredBaseUrl(value.baseUrl) &&
-    typeof value.apiKey === 'string' &&
-    Array.isArray(tools) &&
-    tools.length > 0 &&
-    new Set(tools).size === tools.length &&
-    tools.every((tool) => TOOL_IDS.includes(tool as ToolId)) &&
-    isRecord(models) &&
-    Object.keys(models).every((tool) => TOOL_IDS.includes(tool as ToolId)) &&
-    tools.every((tool) => {
-      const model = models[tool as ToolId]
-      return typeof model === 'string' && model.trim().length > 0 && model.length <= 200
-    }) &&
-    isIsoDate(value.createdAt) &&
-    isIsoDate(value.updatedAt)
+  const tools = input.tools
+  if (
+    !Array.isArray(tools) ||
+    tools.length < 1 ||
+    tools.length > 2 ||
+    new Set(tools).size !== tools.length ||
+    !tools.every((id) => TOOL_IDS.includes(id))
   )
+    errors.tools = '请选择有效的适用工具。'
+  if (Object.keys(errors).length)
+    throw new AppError('INVALID_INPUT', '供应商信息有误，请检查后重试。', errors)
+  return { name, baseUrl, tools: tools as ToolId[] }
 }
 
-function isValidStoredBaseUrl(value: string): boolean {
-  const fieldErrors: Record<string, string> = {}
-  return normalizeBaseUrl(value, fieldErrors) === value && Object.keys(fieldErrors).length === 0
+function validateApiKey(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    !value.trim() ||
+    value.length > 4096 ||
+    hasControlCharacters(value) ||
+    value.includes('••••')
+  )
+    throw new AppError('INVALID_INPUT', '请输入有效的 API Key，不能包含控制字符或脱敏占位值。', {
+      apiKey: '请填写 API Key。'
+    })
+  return value.trim()
 }
 
+function toSummary(provider: PortableProvider): ProviderSummary {
+  return {
+    id: provider.id,
+    name: provider.name,
+    baseUrl: provider.baseUrl,
+    tools: [...provider.tools],
+    models: Object.fromEntries(
+      Object.entries(provider.configurations).map(([id, config]) => [
+        id,
+        config.models.find((model) => model.id === config.defaultModelId)?.model ?? ''
+      ])
+    ),
+    configurations: Object.fromEntries(
+      Object.entries(provider.configurations).map(([id, config]) => [
+        id,
+        {
+          ...structuredClone(config),
+          headers: config.headers.map((header) => ({
+            id: header.id,
+            name: header.name,
+            hasValue: header.value.length > 0
+          }))
+        }
+      ])
+    ),
+    hasApiKey: provider.apiKey.length > 0,
+    maskedApiKey: maskApiKey(provider.apiKey),
+    createdAt: provider.createdAt,
+    updatedAt: provider.updatedAt
+  }
+}
+
+function assertUnique(
+  providers: PortableProvider[],
+  name: string,
+  tools: ToolId[],
+  id?: string
+): void {
+  if (
+    providers.some(
+      (record) =>
+        record.id !== id &&
+        record.name.toLocaleLowerCase() === name.toLocaleLowerCase() &&
+        record.tools.some((tool) => tools.includes(tool))
+    )
+  )
+    throw new AppError('DUPLICATE_PROVIDER', '此工具中已存在同名供应商。', {
+      name: '请使用不同的供应商名称。'
+    })
+}
 function isUuid(value: unknown): value is string {
   return (
     typeof value === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)
   )
 }
-
 function isIsoDate(value: unknown): value is string {
-  return typeof value === 'string' && new Date(value).toISOString() === value
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+  return (
+    typeof value === 'string' &&
+    Number.isFinite(Date.parse(value)) &&
+    new Date(value).toISOString() === value
+  )
 }

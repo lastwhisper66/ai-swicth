@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertCircle, ArrowLeft, Eye, EyeOff, Info } from 'lucide-react'
-import type { AppSnapshot, ProviderSummary, ToolId } from '@shared/ipc'
+import type { AppSnapshot, ProviderSummary, ToolId, ToolInstallation } from '@shared/ipc'
+import { nativeModel, type HeaderInput, type ProviderConfigurations } from '@shared/configuration'
+import { ModelPresetEditor } from './ModelPresetEditor'
+import { createModelPreset } from '@renderer/lib/provider-form'
+import { ConnectionOptionsEditor } from './ConnectionOptionsEditor'
+import { ConfigPreview } from './ConfigPreview'
 import { ToolIcon } from '@renderer/components/ToolIcon'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import { Button } from '@renderer/components/ui/button'
@@ -25,6 +30,8 @@ import { Spinner } from '@renderer/components/ui/spinner'
 interface ProviderFormProps {
   provider: ProviderSummary | null
   toolId: ToolId
+  currentModelId: string | null
+  installation: ToolInstallation
   onCancel: () => void
   onPendingChange: (pending: boolean) => void
   onSaved: (snapshot: AppSnapshot, message: string) => void
@@ -34,12 +41,13 @@ interface ProviderFormState {
   name: string
   baseUrl: string
   apiKey: string
-  model: string
 }
 
 export function ProviderForm({
   provider,
   toolId,
+  currentModelId,
+  installation,
   onCancel,
   onPendingChange,
   onSaved
@@ -48,13 +56,44 @@ export function ProviderForm({
   const [form, setForm] = useState<ProviderFormState>(() => ({
     name: provider?.name ?? '',
     baseUrl: provider?.baseUrl ?? '',
-    apiKey: '',
-    model: provider?.models[toolId] ?? ''
+    apiKey: ''
   }))
+  const [configurations, setConfigurations] = useState<ProviderConfigurations<HeaderInput>>(() => {
+    if (provider)
+      return Object.fromEntries(
+        Object.entries(provider.configurations).map(([id, config]) => [
+          id,
+          {
+            ...structuredClone(config),
+            ...(id === 'claude-code' && {
+              models: config.models.map((model) => ({
+                ...structuredClone(model),
+                model: nativeModel('claude-code', model)
+              }))
+            }),
+            headers: config.headers.map((header) => ({
+              id: header.id,
+              name: header.name,
+              value: { mode: 'keep' as const }
+            }))
+          }
+        ])
+      )
+    const model = createModelPreset()
+    return { [toolId]: { models: [model], defaultModelId: model.id, headers: [] } }
+  })
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState<string | null>(null)
   const [showApiKey, setShowApiKey] = useState(false)
+  const [savedApiKey, setSavedApiKey] = useState<string | null>(null)
+  const [loadingApiKey, setLoadingApiKey] = useState(false)
+  const [apiKeyReadError, setApiKeyReadError] = useState<string | null>(null)
+  const apiKeyError = fieldErrors.apiKey ?? apiKeyReadError
   const [pending, setPending] = useState(false)
+  const configuration = configurations[toolId]!
+  const modelId =
+    configuration.models.find((model) => model.id === currentModelId)?.id ??
+    configuration.defaultModelId
   const formRef = useRef<HTMLFormElement>(null)
 
   useEffect(() => {
@@ -65,7 +104,6 @@ export function ProviderForm({
     event.preventDefault()
     if (pending) return
     const tools = provider?.tools ?? [toolId]
-    const models = { ...provider?.models, [toolId]: form.model }
 
     setPending(true)
     onPendingChange(true)
@@ -79,14 +117,14 @@ export function ProviderForm({
             baseUrl: form.baseUrl,
             apiKey: form.apiKey ? { mode: 'replace', value: form.apiKey } : { mode: 'keep' },
             tools,
-            models
+            configurations
           })
         : await window.api.createProvider({
             name: form.name,
             baseUrl: form.baseUrl,
             apiKey: form.apiKey,
             tools,
-            models
+            configurations
           })
 
       if (!result.ok) {
@@ -111,8 +149,35 @@ export function ProviderForm({
     setForm((current) => ({ ...current, [key]: value }))
   }
 
+  async function toggleApiKeyVisibility(): Promise<void> {
+    if (pending || loadingApiKey) return
+    if (showApiKey) {
+      setShowApiKey(false)
+      return
+    }
+    if (form.apiKey || savedApiKey !== null || !provider?.hasApiKey) {
+      setShowApiKey(true)
+      return
+    }
+    setLoadingApiKey(true)
+    setApiKeyReadError(null)
+    try {
+      const result = await window.api.revealProviderApiKey({ id: provider.id })
+      if (!result.ok) {
+        setApiKeyReadError(result.error.message)
+        return
+      }
+      setSavedApiKey(result.value)
+      setShowApiKey(true)
+    } catch {
+      setApiKeyReadError('无法读取已保存的 API Key，请重新打开应用后重试。')
+    } finally {
+      setLoadingApiKey(false)
+    }
+  }
+
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="min-w-0 w-full space-y-5">
       <Button type="button" variant="ghost" onClick={onCancel} disabled={pending}>
         <ArrowLeft aria-hidden="true" />
         返回 {toolName} 供应商
@@ -191,60 +256,101 @@ export function ProviderForm({
 
                 <FormField
                   label="API Key"
-                  error={fieldErrors.apiKey}
+                  error={apiKeyError}
                   htmlFor="provider-key"
                   hint={
-                    provider
-                      ? `当前密钥：${provider.maskedApiKey}，留空可保留。`
-                      : '密钥保存在本机应用数据目录中，上传云端时会使用备份密码整体加密。'
+                    provider?.hasApiKey
+                      ? '已保存的密钥默认隐藏，点击右侧眼睛查看完整内容；留空可保留。'
+                      : provider
+                        ? '当前没有保存密钥，请输入 API Key。'
+                        : '密钥保存在本机应用数据目录中，上传云端时会使用备份密码整体加密。'
                   }
                 >
                   <InputGroup>
                     <InputGroupInput
                       id="provider-key"
                       type={showApiKey ? 'text' : 'password'}
-                      value={form.apiKey}
-                      onChange={(event) => updateForm('apiKey', event.target.value)}
-                      placeholder={provider ? '留空表示保留已保存密钥' : '输入 API Key'}
-                      aria-invalid={Boolean(fieldErrors.apiKey)}
-                      aria-describedby={`provider-key-hint${fieldErrors.apiKey ? ' provider-key-error' : ''}`}
+                      value={form.apiKey || savedApiKey || ''}
+                      onChange={(event) => {
+                        setSavedApiKey(null)
+                        setApiKeyReadError(null)
+                        updateForm('apiKey', event.target.value)
+                      }}
+                      placeholder={provider?.hasApiKey ? '••••••••' : '输入 API Key'}
+                      disabled={loadingApiKey}
+                      aria-invalid={Boolean(apiKeyError)}
+                      aria-describedby={`provider-key-hint${apiKeyError ? ' provider-key-error' : ''}`}
                       autoComplete="off"
                       spellCheck={false}
                     />
                     <InputGroupAddon align="inline-end">
                       <InputGroupButton
                         size="icon-sm"
-                        onClick={() => setShowApiKey((visible) => !visible)}
-                        aria-label={showApiKey ? '隐藏 API Key' : '显示本次输入的 API Key'}
+                        onClick={() => void toggleApiKeyVisibility()}
+                        disabled={loadingApiKey}
+                        aria-label={
+                          loadingApiKey
+                            ? '正在读取 API Key'
+                            : showApiKey
+                              ? '隐藏 API Key'
+                              : '显示 API Key'
+                        }
+                        aria-busy={loadingApiKey}
                         aria-pressed={showApiKey}
                       >
-                        {showApiKey ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                        {loadingApiKey ? (
+                          <Spinner aria-hidden="true" />
+                        ) : showApiKey ? (
+                          <EyeOff aria-hidden="true" />
+                        ) : (
+                          <Eye aria-hidden="true" />
+                        )}
                       </InputGroupButton>
                     </InputGroupAddon>
                   </InputGroup>
                 </FormField>
 
-                <FormField
-                  label="模型名称"
-                  error={fieldErrors[`models.${toolId}`]}
-                  htmlFor="provider-model"
-                  hint={`填写供应商提供的 ${toolName} 模型标识。`}
-                >
-                  <Input
-                    id="provider-model"
-                    value={form.model}
-                    onChange={(event) => updateForm('model', event.target.value)}
-                    placeholder={
-                      toolId === 'claude-code' ? '例如：claude-sonnet-4-6' : '例如：gpt-5.4'
-                    }
-                    aria-invalid={Boolean(fieldErrors[`models.${toolId}`])}
-                    aria-describedby={`provider-model-hint${fieldErrors[`models.${toolId}`] ? ' provider-model-error' : ''}`}
-                    autoCapitalize="none"
-                    spellCheck={false}
-                  />
-                </FormField>
+                <ModelPresetEditor
+                  toolId={toolId}
+                  configuration={configurations[toolId]!}
+                  installation={installation}
+                  onChange={(value) =>
+                    setConfigurations((current) => ({ ...current, [toolId]: value }))
+                  }
+                />
+                <ConnectionOptionsEditor
+                  toolId={toolId}
+                  configuration={configurations[toolId]!}
+                  installation={installation}
+                  savedHeaders={provider?.configurations[toolId]?.headers}
+                  onChange={(value) =>
+                    setConfigurations((current) => ({ ...current, [toolId]: value }))
+                  }
+                />
               </FieldGroup>
             </FieldSet>
+            {provider && (
+              <section className="min-w-0 space-y-4 border-t pt-5" aria-label="供应商完整配置">
+                <h3 className="font-semibold">完整配置</h3>
+                <ConfigPreview
+                  disabled={pending}
+                  input={{
+                    toolId,
+                    modelId,
+                    draft: {
+                      id: provider.id,
+                      name: form.name,
+                      baseUrl: form.baseUrl,
+                      apiKey: form.apiKey
+                        ? { mode: 'replace', value: form.apiKey }
+                        : { mode: 'keep' },
+                      tools: provider.tools,
+                      configurations
+                    }
+                  }}
+                />
+              </section>
+            )}
 
             <div className="flex flex-wrap items-center justify-between gap-4 border-t pt-5">
               <p className="text-xs leading-5 text-muted-foreground">保存后需手动应用到工具。</p>

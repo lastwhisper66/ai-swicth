@@ -1,9 +1,10 @@
 import { useEffect, useId, useState } from 'react'
-import { AlertCircle, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react'
+import { AlertCircle, RefreshCw } from 'lucide-react'
 import type { ConfigPreview as ConfigPreviewData, PreviewConfigInput } from '@shared/ipc'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import { Button } from '@renderer/components/ui/button'
 import { Spinner } from '@renderer/components/ui/spinner'
+import { Label } from '@renderer/components/ui/label'
 import { Textarea } from '@renderer/components/ui/textarea'
 
 export function ConfigPreview({
@@ -14,34 +15,17 @@ export function ConfigPreview({
   disabled?: boolean
 }): React.JSX.Element {
   const id = useId()
-  const [open, setOpen] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const requestKey = JSON.stringify(input)
 
   return (
-    <div className="min-w-0 space-y-3">
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={disabled}
-        aria-expanded={open}
-        aria-controls={id}
-        onClick={() => setOpen((value) => !value)}
-      >
-        {open ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
-        {open ? '收起完整配置' : '查看完整配置'}
-      </Button>
-      {open && (
-        <PreviewContent
-          key={`${requestKey}:${refresh}:${disabled}`}
-          id={id}
-          requestKey={requestKey}
-          disabled={disabled}
-          onRefresh={() => setRefresh((value) => value + 1)}
-        />
-      )}
-    </div>
+    <PreviewContent
+      key={`${requestKey}:${refresh}`}
+      id={id}
+      requestKey={requestKey}
+      disabled={disabled}
+      onRefresh={() => setRefresh((value) => value + 1)}
+    />
   )
 }
 
@@ -86,7 +70,7 @@ function PreviewContent({
       <div className="flex items-start justify-between gap-3">
         <p className="text-xs leading-5 text-muted-foreground">
           {input.providerId || input.draft
-            ? '应用后预览：供应商与已保存共通配置合并，尚未写入文件。'
+            ? '当前模型配置：合并供应商草稿与已保存的共通配置，应用后写入文件。'
             : '当前文件：展示所选配置目录中实际保存的内容。'}
           密钥已脱敏，内容只读。
         </p>
@@ -108,11 +92,16 @@ function PreviewContent({
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+      {preview?.warnings.map((warning) => (
+        <p key={warning} className="text-xs leading-5 text-muted-foreground">
+          {warning}
+        </p>
+      ))}
       {preview?.files.map((file, index) => (
         <div key={file.path} className="min-w-0 space-y-2">
-          <label htmlFor={`${id}-${index}`} className="block text-xs font-medium break-all">
+          <Label htmlFor={`${id}-${index}`} className="block text-xs font-medium break-all">
             {file.path}
-          </label>
+          </Label>
           {file.content === null ? (
             <p className="text-xs text-muted-foreground">文件尚不存在。</p>
           ) : (

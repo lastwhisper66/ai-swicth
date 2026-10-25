@@ -13,21 +13,24 @@ import type {
   CloudBackupSettings
 } from '@shared/ipc'
 import { TOOL_IDS, type ToolId } from '@shared/ipc'
+import { parseConfiguration, type ManagedState } from '@shared/configuration'
 import { AppError } from '../errors'
 import type { PortableProvider, ProviderStore } from '../providers/store'
 import type { AppSettingsStore } from './app-settings'
 import type { CommonConfigStore } from './common-config'
+import type { ManagedStateStore } from './managed-state'
 
-const CLOUD_DOCUMENT_VERSION = 1
+const CLOUD_DOCUMENT_VERSION = 2
 const ENVELOPE_VERSION = 1
 const LEGACY_OBJECT_NAME = 'backup.v1.json.enc'
 const PASSWORD_MIN_LENGTH = 8
 
 interface CloudBackupDocument {
-  version: typeof CLOUD_DOCUMENT_VERSION
+  version: 1 | 2
   createdAt: string
   providers: PortableProvider[]
   commonConfigs: Record<ToolId, string | null>
+  managedStates?: Record<ToolId, ManagedState | null>
 }
 
 interface EncryptedEnvelope {
@@ -49,7 +52,8 @@ export class CloudBackupService {
   constructor(
     private readonly providerStore: ProviderStore,
     private readonly commonConfigs: CommonConfigStore,
-    private readonly appSettings: AppSettingsStore
+    private readonly appSettings: AppSettingsStore,
+    private readonly managedStates: ManagedStateStore
   ) {}
 
   async testConnection(): Promise<CloudBackupConnectionResult> {
@@ -73,9 +77,10 @@ export class CloudBackupService {
         version: CLOUD_DOCUMENT_VERSION,
         createdAt: new Date().toISOString(),
         providers: await this.providerStore.exportPortable(),
-        commonConfigs: await this.commonConfigs.exportPortable()
+        commonConfigs: await this.commonConfigs.exportPortable(),
+        managedStates: await this.managedStates.exportPortable()
       }
-      const objectKey = `${getObjectPrefix(settings)}backups/${document.createdAt.replace(/[:.]/gu, '-')}-${randomUUID()}.v1.json.enc`
+      const objectKey = `${getObjectPrefix(settings)}backups/${document.createdAt.replace(/[:.]/gu, '-')}-${randomUUID()}.v2.json.enc`
       await client.send(
         new PutObjectCommand({
           Bucket: settings.bucket,
@@ -136,15 +141,36 @@ export class CloudBackupService {
       }
       const encrypted = await response.Body.transformToString()
       const document = decryptDocument(encrypted, encryptionPassword)
+      // Validate every payload before replacing any local file, including legacy templates.
+      try {
+        document.providers = this.providerStore.validatePortable(document.providers)
+        for (const toolId of TOOL_IDS) {
+          const common = document.commonConfigs[toolId]
+          if (common !== null) parseConfiguration(toolId, common)
+          const state = document.managedStates?.[toolId]
+          if (state !== undefined && state !== null)
+            this.managedStates.decode(JSON.stringify(state))
+        }
+      } catch {
+        throw new AppError(
+          'CLOUD_BACKUP_INVALID',
+          '云端备份包含无效的供应商、共通配置或接管状态，未修改本地配置。'
+        )
+      }
       const previousProviders = await this.providerStore.exportPortable()
       const previousCommonConfigs = await this.commonConfigs.exportPortable()
+      const previousManagedStates = await this.managedStates.exportPortable()
       try {
         await this.providerStore.importPortable(document.providers)
         await this.commonConfigs.importPortable(document.commonConfigs)
+        await this.managedStates.importPortable(
+          document.managedStates ?? { 'claude-code': null, codex: null }
+        )
       } catch (error) {
         try {
           await this.providerStore.importPortable(previousProviders)
           await this.commonConfigs.importPortable(previousCommonConfigs)
+          await this.managedStates.importPortable(previousManagedStates)
         } catch {
           throw new AppError(
             'ROLLBACK_FAILED',
@@ -159,7 +185,7 @@ export class CloudBackupService {
         providerCount: document.providers.length,
         commonConfigCount: TOOL_IDS.filter((toolId) => document.commonConfigs[toolId] !== null)
           .length,
-        message: `已从最新云端备份恢复 ${document.providers.length} 个供应商和共通配置，请新建或重启工具会话。`,
+        message: `已从最新云端备份恢复 ${document.providers.length} 个供应商、模型预设和共通配置，请手动应用到对应工具。`,
         warnings: []
       }
     } catch (error) {
@@ -339,7 +365,7 @@ function isBackupKey(key: string, prefix: string): boolean {
   const relativeKey = key.slice(prefix.length)
   return (
     relativeKey === LEGACY_OBJECT_NAME ||
-    (relativeKey.startsWith('backups/') && relativeKey.endsWith('.v1.json.enc'))
+    (relativeKey.startsWith('backups/') && /\.v[12]\.json\.enc$/u.test(relativeKey))
   )
 }
 
@@ -452,7 +478,7 @@ function isCloudBackupDocument(value: unknown): value is CloudBackupDocument {
   if (typeof value !== 'object' || value === null) return false
   const input = value as Record<string, unknown>
   if (
-    input.version !== CLOUD_DOCUMENT_VERSION ||
+    (input.version !== 1 && input.version !== CLOUD_DOCUMENT_VERSION) ||
     typeof input.createdAt !== 'string' ||
     !Array.isArray(input.providers) ||
     typeof input.commonConfigs !== 'object' ||
@@ -461,6 +487,14 @@ function isCloudBackupDocument(value: unknown): value is CloudBackupDocument {
   ) {
     return false
   }
+  if (
+    (input.version === 2 || input.managedStates !== undefined) &&
+    (typeof input.managedStates !== 'object' ||
+      input.managedStates === null ||
+      Array.isArray(input.managedStates) ||
+      !TOOL_IDS.every((toolId) => Object.hasOwn(input.managedStates as object, toolId)))
+  )
+    return false
   const commonConfigs = input.commonConfigs as Record<string, unknown>
   if (
     !TOOL_IDS.every(
@@ -482,8 +516,8 @@ function isPortableProvider(value: unknown): value is PortableProvider {
     typeof input.apiKey === 'string' &&
     Array.isArray(input.tools) &&
     input.tools.every((toolId) => TOOL_IDS.includes(toolId as ToolId)) &&
-    typeof input.models === 'object' &&
-    input.models !== null &&
+    ((typeof input.models === 'object' && input.models !== null) ||
+      (typeof input.configurations === 'object' && input.configurations !== null)) &&
     typeof input.createdAt === 'string' &&
     typeof input.updatedAt === 'string'
   )

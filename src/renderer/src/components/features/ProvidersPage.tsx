@@ -10,7 +10,7 @@ import {
   EmptyTitle
 } from '@renderer/components/ui/empty'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@renderer/components/ui/tabs'
-import { ProviderCard } from './ProviderCard'
+import { ProviderRow } from './ProviderRow'
 
 interface ProvidersPageProps {
   providers: ProviderSummary[]
@@ -88,19 +88,28 @@ export function ProvidersPage({
                   </EmptyHeader>
                 </Empty>
               ) : (
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,24rem),1fr))] gap-4">
+                <ul
+                  className="grid list-none grid-cols-1 gap-3 p-0"
+                  aria-label={`${toolName} 供应商设置`}
+                >
                   {toolProviders.map((provider) => (
-                    <ProviderCard
-                      key={provider.id}
-                      provider={provider}
-                      toolId={id}
-                      busy={busy}
-                      isCurrent={provider.id === tools[id].currentProviderId}
-                      onEdit={() => onEdit(provider, id)}
-                      onDelete={() => onDelete(provider.id)}
-                    />
+                    <li key={provider.id} className="min-w-0">
+                      <ProviderRow
+                        provider={provider}
+                        toolId={id}
+                        busy={busy}
+                        isCurrent={provider.id === tools[id].currentProviderId}
+                        currentModelId={
+                          provider.id === tools[id].currentProviderId
+                            ? tools[id].currentModelId
+                            : null
+                        }
+                        onEdit={() => onEdit(provider, id)}
+                        onDelete={() => onDelete(provider.id)}
+                      />
+                    </li>
                   ))}
-                </div>
+                </ul>
               )}
             </TabsContent>
           )
