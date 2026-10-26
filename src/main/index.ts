@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, Menu, nativeImage, Tray } from 'electron'
 import { join, resolve } from 'path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { WINDOW_STATE_CHANGED } from '@shared/ipc'
 import { registerAppIpc } from './ipc'
 import { ClaudeCodeAdapter } from './adapters/claude-code'
 import { CodexAdapter } from './adapters/codex'
@@ -65,6 +66,7 @@ function createWindow(): void {
     minWidth: 720,
     minHeight: 560,
     title: 'AI Switch',
+    frame: false,
     show: false,
     autoHideMenuBar: true,
     icon: process.platform === 'win32' ? windowsIcon : icon,
@@ -80,6 +82,14 @@ function createWindow(): void {
   window.on('ready-to-show', () => {
     window.show()
   })
+
+  const notifyWindowState = (): void => {
+    if (!window.webContents.isDestroyed()) {
+      window.webContents.send(WINDOW_STATE_CHANGED, { isMaximized: window.isMaximized() })
+    }
+  }
+  window.on('maximize', notifyWindowState)
+  window.on('unmaximize', notifyWindowState)
 
   window.on('close', (event) => {
     if (isQuitting) return

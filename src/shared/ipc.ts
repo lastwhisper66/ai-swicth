@@ -1,4 +1,4 @@
-import type { FieldValue, ProviderConfigurations, HeaderInput } from './configuration'
+import type { FieldValue, ProviderConfigurations, HeaderInput, HeaderValue } from './configuration'
 
 export const IPC_CHANNELS = {
   getAppInfo: 'app:get-info',
@@ -6,13 +6,18 @@ export const IPC_CHANNELS = {
   setAppSettings: 'app:set-settings',
   setCloudBackupSettings: 'cloud-backup:set-settings',
   setCloudBackupPassword: 'cloud-backup:set-password',
+  getCloudBackupSecret: 'cloud-backup:get-secret',
   testCloudBackup: 'cloud-backup:test',
   uploadCloudBackup: 'cloud-backup:upload',
   restoreCloudBackup: 'cloud-backup:restore',
   setNativeTheme: 'app:set-native-theme',
+  getWindowState: 'window:get-state',
+  minimizeWindow: 'window:minimize',
+  toggleMaximizeWindow: 'window:toggle-maximize',
+  closeWindow: 'window:close',
   createProvider: 'providers:create',
   updateProvider: 'providers:update',
-  revealProviderApiKey: 'providers:reveal-api-key',
+  getProviderSecrets: 'providers:get-secrets',
   deleteProvider: 'providers:delete',
   pickToolPath: 'tools:pick-path',
   setToolPath: 'tools:set-path',
@@ -25,6 +30,12 @@ export const IPC_CHANNELS = {
   applyProvider: 'switch:apply',
   restoreBackup: 'backups:restore'
 } as const
+
+export const WINDOW_STATE_CHANGED = 'window:state-changed'
+
+export interface WindowState {
+  isMaximized: boolean
+}
 
 export const TOOL_IDS = ['claude-code', 'codex'] as const
 
@@ -129,8 +140,13 @@ export interface DeleteProviderInput {
   id: string
 }
 
-export interface RevealProviderApiKeyInput {
+export interface GetProviderSecretsInput {
   id: string
+}
+
+export interface ProviderSecrets {
+  apiKey: string
+  headers: Partial<Record<ToolId, HeaderValue[]>>
 }
 
 export type ToolPathSource = 'default' | 'environment' | 'custom'
@@ -320,11 +336,19 @@ export interface ApiError {
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: ApiError }
 
 export interface DesktopApi {
+  window: {
+    getState: () => Promise<ApiResult<WindowState>>
+    minimize: () => Promise<ApiResult<void>>
+    toggleMaximize: () => Promise<ApiResult<WindowState>>
+    close: () => Promise<ApiResult<void>>
+    onStateChanged: (listener: (state: WindowState) => void) => () => void
+  }
   getAppInfo: () => Promise<AppInfo>
   getSnapshot: () => Promise<ApiResult<AppSnapshot>>
   setAppSettings: (input: AppSettingsInput) => Promise<ApiResult<AppSnapshot>>
   setCloudBackupSettings: (input: CloudBackupSettingsInput) => Promise<ApiResult<AppSnapshot>>
   setCloudBackupPassword: (input: CloudBackupOperationInput) => Promise<ApiResult<AppSnapshot>>
+  getCloudBackupSecret: () => Promise<ApiResult<string>>
   testCloudBackup: (
     input: CloudBackupSettingsInput
   ) => Promise<ApiResult<CloudBackupConnectionResult>>
@@ -337,7 +361,7 @@ export interface DesktopApi {
   setNativeTheme: (input: SetNativeThemeInput) => Promise<ApiResult<void>>
   createProvider: (input: CreateProviderInput) => Promise<ApiResult<AppSnapshot>>
   updateProvider: (input: UpdateProviderInput) => Promise<ApiResult<AppSnapshot>>
-  revealProviderApiKey: (input: RevealProviderApiKeyInput) => Promise<ApiResult<string>>
+  getProviderSecrets: (input: GetProviderSecretsInput) => Promise<ApiResult<ProviderSecrets>>
   deleteProvider: (input: DeleteProviderInput) => Promise<ApiResult<AppSnapshot>>
   pickToolPath: (input: PickToolPathInput) => Promise<ApiResult<string | null>>
   setToolPath: (input: SetToolPathInput) => Promise<ApiResult<AppSnapshot>>

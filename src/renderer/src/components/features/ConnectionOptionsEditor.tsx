@@ -5,6 +5,7 @@ import {
   ROUTE_KEYS,
   type HeaderInput,
   type HeaderSummary,
+  type HeaderValue,
   type ProviderToolConfiguration
 } from '@shared/configuration'
 import { Button } from '@renderer/components/ui/button'
@@ -16,11 +17,15 @@ export function ConnectionOptionsEditor({
   toolId,
   configuration,
   savedHeaders = [],
+  savedValues = [],
+  loadingSecrets = false,
   onChange
 }: {
   toolId: ToolId
   configuration: ProviderToolConfiguration<HeaderInput>
   savedHeaders?: HeaderSummary[]
+  savedValues?: HeaderValue[]
+  loadingSecrets?: boolean
   onChange: (value: ProviderToolConfiguration<HeaderInput>) => void
 }): React.JSX.Element {
   const updateHeader = (id: string, change: Partial<HeaderInput>): void =>
@@ -53,73 +58,79 @@ export function ConnectionOptionsEditor({
         </Button>
       </div>
       <p className="text-xs leading-6 text-muted-foreground">
-        值默认隐藏；保留已保存的值，或输入新值替换，点击删除移除此头。API Key 负责鉴权，请勿添加
-        Authorization 或 x-api-key。不保证覆盖 SDK 自动生成的头。
+        已保存的值会自动填入，可直接编辑，点击删除移除此头。API Key 负责鉴权，请勿添加 Authorization
+        或 x-api-key。不保证覆盖 SDK 自动生成的头。
       </p>
-      {configuration.headers.map((header, index) => (
-        <div key={header.id} className="grid grid-cols-[1fr_1fr_auto] items-end gap-3">
-          <Field className="min-w-0 gap-2">
-            <FieldLabel htmlFor={`header-${header.id}-name`}>名称 {index + 1}</FieldLabel>
-            <Input
-              id={`header-${header.id}-name`}
-              value={header.name}
-              placeholder="X-Client-Name"
-              onChange={(event) =>
-                updateHeader(header.id, {
-                  name: event.target.value,
-                  ...(header.value.mode === 'keep' ? { value: { mode: 'replace', value: '' } } : {})
-                })
-              }
-              spellCheck={false}
-            />
-          </Field>
-          <Field className="min-w-0 gap-2">
-            <FieldLabel htmlFor={`header-${header.id}-value`}>
-              值{header.value.mode === 'keep' ? '（已保存）' : ''}
-            </FieldLabel>
-            <Input
-              id={`header-${header.id}-value`}
-              type="password"
-              value={header.value.mode === 'replace' ? header.value.value : ''}
-              onChange={(event) =>
-                updateHeader(header.id, { value: { mode: 'replace', value: event.target.value } })
-              }
-              placeholder={header.value.mode === 'keep' ? '•••••••• 留空保留' : '输入请求头值'}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </Field>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label={`删除请求头 ${index + 1}`}
-            onClick={() =>
-              onChange({
-                ...configuration,
-                headers: configuration.headers.filter((entry) => entry.id !== header.id)
-              })
-            }
-          >
-            <Trash2 />
-          </Button>
-          {savedHeaders.some(
-            (saved) =>
-              saved.id === header.id && saved.name.toLowerCase() === header.name.toLowerCase()
-          ) && (
+      {configuration.headers.map((header, index) => {
+        const savedValue = savedValues.find((saved) => saved.id === header.id)?.value ?? ''
+        return (
+          <div key={header.id} className="grid grid-cols-[1fr_1fr_auto] items-end gap-3">
+            <Field className="min-w-0 gap-2">
+              <FieldLabel htmlFor={`header-${header.id}-name`}>名称 {index + 1}</FieldLabel>
+              <Input
+                id={`header-${header.id}-name`}
+                value={header.name}
+                placeholder="X-Client-Name"
+                disabled={loadingSecrets && header.value.mode === 'keep'}
+                onChange={(event) =>
+                  updateHeader(header.id, {
+                    name: event.target.value,
+                    ...(header.value.mode === 'keep'
+                      ? { value: { mode: 'replace', value: savedValue } }
+                      : {})
+                  })
+                }
+                spellCheck={false}
+              />
+            </Field>
+            <Field className="min-w-0 gap-2">
+              <FieldLabel htmlFor={`header-${header.id}-value`}>
+                值{header.value.mode === 'keep' ? '（已保存）' : ''}
+              </FieldLabel>
+              <Input
+                id={`header-${header.id}-value`}
+                disabled={loadingSecrets && header.value.mode === 'keep'}
+                value={header.value.mode === 'replace' ? header.value.value : savedValue}
+                onChange={(event) =>
+                  updateHeader(header.id, { value: { mode: 'replace', value: event.target.value } })
+                }
+                placeholder={loadingSecrets ? '正在读取请求头值…' : '输入请求头值'}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </Field>
             <Button
               type="button"
-              variant="link"
-              size="sm"
-              className="col-span-3 justify-start"
-              disabled={header.value.mode === 'keep'}
-              onClick={() => updateHeader(header.id, { value: { mode: 'keep' } })}
+              variant="ghost"
+              size="icon"
+              aria-label={`删除请求头 ${index + 1}`}
+              onClick={() =>
+                onChange({
+                  ...configuration,
+                  headers: configuration.headers.filter((entry) => entry.id !== header.id)
+                })
+              }
             >
-              保留原值
+              <Trash2 />
             </Button>
-          )}
-        </div>
-      ))}
+            {savedHeaders.some(
+              (saved) =>
+                saved.id === header.id && saved.name.toLowerCase() === header.name.toLowerCase()
+            ) && (
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                className="col-span-3 justify-start"
+                disabled={header.value.mode === 'keep'}
+                onClick={() => updateHeader(header.id, { value: { mode: 'keep' } })}
+              >
+                保留原值
+              </Button>
+            )}
+          </div>
+        )
+      })}
       {toolId === 'codex' ? (
         <ConfigurationSelect
           label="Responses WebSocket 兼容能力"

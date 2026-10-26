@@ -17,13 +17,14 @@ export function ModeToggle(): React.JSX.Element {
     <Button
       type="button"
       variant="ghost"
-      size="icon-lg"
-      className="size-10"
+      className="h-10 w-full justify-start gap-3 px-3"
       onClick={() => setTheme(next)}
       aria-label={description}
       title={description}
     >
       <Icon aria-hidden="true" />
+      <span>主题</span>
+      <span className="ml-auto text-xs font-normal text-muted-foreground">{label}</span>
     </Button>
   )
 }

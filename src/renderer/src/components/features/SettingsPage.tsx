@@ -1,5 +1,6 @@
-import { Database, FileCog, HardDrive, Settings, SlidersHorizontal } from 'lucide-react'
+import { Database, FileCog, HardDrive, Info, Settings, SlidersHorizontal } from 'lucide-react'
 import type {
+  AppInfo,
   AppSnapshot,
   AppSettings,
   BackupSummary,
@@ -16,11 +17,13 @@ import { ProvidersPage } from './ProvidersPage'
 import { SettingsBackups } from './SettingsBackups'
 import { CommonConfigPage } from './CommonConfigPage'
 import { GeneralSettings } from './GeneralSettings'
+import { AboutSettings } from './AboutSettings'
 
-export type SettingsSection = 'general' | 'providers' | 'common' | 'paths' | 'backups'
+export type SettingsSection = 'general' | 'providers' | 'common' | 'paths' | 'backups' | 'about'
 
 interface SettingsPageProps {
   section: SettingsSection
+  appInfo: AppInfo
   settings: AppSettings
   onCloseBehaviorChange: (behavior: CloseBehavior) => void
   onSectionChange: (section: SettingsSection) => void
@@ -69,11 +72,13 @@ const items: Array<{
     Icon: SlidersHorizontal
   },
   { id: 'paths', label: '配置路径', description: '设置两个工具的配置目录', Icon: FileCog },
-  { id: 'backups', label: '备份与恢复', description: '查看和恢复历史配置', Icon: HardDrive }
+  { id: 'backups', label: '备份与恢复', description: '查看和恢复历史配置', Icon: HardDrive },
+  { id: 'about', label: '关于', description: '查看应用信息与版本', Icon: Info }
 ]
 
 export function SettingsPage({
   section,
+  appInfo,
   settings,
   onCloseBehaviorChange,
   onSectionChange,
@@ -102,37 +107,30 @@ export function SettingsPage({
   onRestoreCloudBackup
 }: SettingsPageProps): React.JSX.Element {
   return (
-    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[14rem_minmax(0,1fr)]">
-      <aside className="min-w-0 space-y-2 lg:sticky lg:top-8 lg:self-start">
-        <div className="px-2 pb-1">
+    <div className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-4">
+        <div>
           <h2 className="font-semibold">设置</h2>
           <p className="mt-1 text-xs text-muted-foreground">管理应用与本地配置</p>
         </div>
-        <nav
-          className="flex min-w-0 max-w-full gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0"
-          aria-label="设置分类"
-        >
+        <nav className="flex flex-wrap gap-1 border-b pb-4" aria-label="设置分类">
           {items.map(({ id, label, description, Icon }) => (
             <Button
               key={id}
               type="button"
               variant={section === id ? 'secondary' : 'ghost'}
-              className="h-10 min-w-max justify-start gap-2 px-3 py-2 text-left lg:h-auto lg:w-full lg:min-w-0 lg:gap-3 lg:py-2.5"
+              className="h-9 justify-start gap-2 px-3"
               disabled={busy}
               onClick={() => onSectionChange(id)}
               aria-current={section === id ? 'page' : undefined}
+              title={description}
             >
               <Icon className="size-4 shrink-0" aria-hidden="true" />
-              <span>
-                <span className="block text-sm">{label}</span>
-                <span className="mt-0.5 hidden text-xs font-normal text-muted-foreground lg:block">
-                  {description}
-                </span>
-              </span>
+              {label}
             </Button>
           ))}
         </nav>
-      </aside>
+      </div>
 
       <section className="min-w-0">
         {section === 'general' ? (
@@ -161,6 +159,8 @@ export function SettingsPage({
             onPendingChange={onPendingChange}
             onSaved={onCommonSaved}
           />
+        ) : section === 'about' ? (
+          <AboutSettings appInfo={appInfo} />
         ) : (
           <SettingsBackups
             section={section}

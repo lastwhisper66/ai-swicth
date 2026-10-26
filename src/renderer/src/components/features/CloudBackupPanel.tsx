@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Cloud, Eye, EyeOff, RefreshCw, Save, Upload, Download } from 'lucide-react'
+import { Cloud, RefreshCw, Save, Upload, Download } from 'lucide-react'
 import type { CloudBackupSettings, CloudBackupSettingsInput } from '@shared/ipc'
 import { CLOUD_BACKUP_RETENTION } from '@shared/ipc'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
@@ -31,6 +31,8 @@ import {
   SelectValue
 } from '@renderer/components/ui/select'
 import { Spinner } from '@renderer/components/ui/spinner'
+import { PasswordInput } from '@renderer/components/PasswordInput'
+import { useStoredSecrets } from '@renderer/hooks/use-stored-secrets'
 import { ConfigurationCheckbox } from './ConfigurationCheckbox'
 
 interface CloudBackupPanelProps {
@@ -43,6 +45,9 @@ interface CloudBackupPanelProps {
   onUpload: (password: string) => void
   onRestore: (password: string) => void
 }
+
+const readCloudBackupSecret = (): ReturnType<typeof window.api.getCloudBackupSecret> =>
+  window.api.getCloudBackupSecret()
 
 export function CloudBackupPanel({
   settings,
@@ -61,12 +66,16 @@ export function CloudBackupPanel({
   const [prefix, setPrefix] = useState(settings.prefix)
   const [retentionCount, setRetentionCount] = useState(settings.retentionCount)
   const [accessKeyId, setAccessKeyId] = useState(settings.accessKeyId)
-  const [secretAccessKey, setSecretAccessKey] = useState('')
+  const savedSecret = useStoredSecrets(
+    readCloudBackupSecret,
+    true,
+    '无法读取已保存的 Secret Access Key，请重试或重新打开应用。'
+  )
+  const [secretDraft, setSecretDraft] = useState<string | null>(null)
   const [clearSecret, setClearSecret] = useState(false)
+  const secretAccessKey = clearSecret ? '' : (secretDraft ?? savedSecret.value ?? '')
   const [passwordDraft, setPasswordDraft] = useState<string | null>(null)
   const password = passwordDraft ?? settings.encryptionPassword
-  const [showSecret, setShowSecret] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
   const passwordSaveTimer = useRef<number | undefined>(undefined)
 
   const settingsDirty =
@@ -77,12 +86,12 @@ export function CloudBackupPanel({
     prefix.trim() !== settings.prefix ||
     retentionCount !== settings.retentionCount ||
     accessKeyId.trim() !== settings.accessKeyId ||
-    secretAccessKey.length > 0 ||
+    Boolean(secretDraft?.length) ||
     clearSecret
   const passwordValid = isValidPassword(password)
   const passwordInvalid = password.length > 0 && !passwordValid
-  const canOperate = settings.enabled && !settingsDirty && passwordValid && !busy
-  const secretLabel = settings.hasSecret ? `已保存 ${settings.maskedSecret}` : '尚未保存'
+  const canOperate =
+    settings.enabled && !settingsDirty && passwordValid && !busy && !savedSecret.loading
 
   useEffect(() => () => window.clearTimeout(passwordSaveTimer.current), [])
 
@@ -96,8 +105,8 @@ export function CloudBackupPanel({
       retentionCount,
       accessKeyId,
       secretAccessKey:
-        secretAccessKey.length > 0
-          ? { mode: 'replace', value: secretAccessKey }
+        secretDraft && !clearSecret
+          ? { mode: 'replace', value: secretDraft }
           : clearSecret
             ? { mode: 'clear' }
             : { mode: 'keep' }
@@ -105,8 +114,8 @@ export function CloudBackupPanel({
   }
 
   async function persistPassword(value: string): Promise<void> {
-    const saved = await onSavePassword(value)
-    if (saved) setPasswordDraft((current) => (current === value ? null : current))
+    // Retain the draft so a deferred snapshot cannot briefly restore the old password.
+    if (value !== settings.encryptionPassword) await onSavePassword(value)
   }
 
   function changePassword(value: string): void {
@@ -119,14 +128,22 @@ export function CloudBackupPanel({
 
   function savePassword(): void {
     window.clearTimeout(passwordSaveTimer.current)
-    if (passwordDraft !== null && (passwordValid || password.length === 0)) {
+    if (
+      passwordDraft !== null &&
+      password !== settings.encryptionPassword &&
+      (passwordValid || password.length === 0)
+    ) {
       void persistPassword(password)
     }
   }
 
   async function saveSettings(): Promise<void> {
+    if (savedSecret.loading) return
     if (await onSave(buildSettingsInput())) {
-      setSecretAccessKey('')
+      if (clearSecret || secretDraft || savedSecret.value !== null) {
+        savedSecret.adopt(clearSecret ? '' : secretDraft || savedSecret.value || '')
+      }
+      setSecretDraft(null)
       setClearSecret(false)
     }
   }
@@ -240,28 +257,41 @@ export function CloudBackupPanel({
           </Field>
           <Field>
             <FieldLabel htmlFor="cloud-secret-key">Secret Access Key</FieldLabel>
-            <div className="relative">
-              <Input
-                id="cloud-secret-key"
-                type={showSecret ? 'text' : 'password'}
-                value={secretAccessKey}
-                onChange={(event) => setSecretAccessKey(event.target.value)}
-                placeholder={secretLabel}
-                disabled={busy}
-                className="pr-10"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="absolute right-1 top-1/2 -translate-y-1/2"
-                onClick={() => setShowSecret((value) => !value)}
-                disabled={busy}
-                aria-label={showSecret ? '隐藏 Secret Key' : '显示 Secret Key'}
-              >
-                {showSecret ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
-              </Button>
-            </div>
+            <PasswordInput
+              id="cloud-secret-key"
+              label="Secret Access Key"
+              value={secretAccessKey}
+              onChange={(event) => setSecretDraft(event.target.value)}
+              placeholder={
+                savedSecret.loading
+                  ? '正在读取 Secret Access Key…'
+                  : settings.hasSecret
+                    ? '留空保留已保存的 Secret Access Key'
+                    : '输入 Secret Access Key'
+              }
+              loading={savedSecret.loading}
+              disabled={busy || clearSecret}
+              aria-invalid={Boolean(savedSecret.error)}
+              aria-describedby={`cloud-secret-description${savedSecret.error ? ' cloud-secret-error' : ''}`}
+            />
+            <FieldDescription id="cloud-secret-description">
+              已保存的密钥自动载入并默认隐藏，可直接编辑；留空保留原值，勾选下方选项才会清除。
+            </FieldDescription>
+            {savedSecret.error && (
+              <>
+                <FieldError id="cloud-secret-error">{savedSecret.error}</FieldError>
+                <Button
+                  type="button"
+                  variant="link"
+                  className="h-auto justify-start p-0"
+                  onClick={savedSecret.reload}
+                  disabled={busy}
+                >
+                  <RefreshCw aria-hidden="true" />
+                  重新读取 Secret Access Key
+                </Button>
+              </>
+            )}
             {settings.hasSecret && (
               <ConfigurationCheckbox
                 className="mt-1"
@@ -269,7 +299,7 @@ export function CloudBackupPanel({
                 label="清除已保存的 Secret Key"
                 checked={clearSecret}
                 onCheckedChange={(value) => setClearSecret(value === true)}
-                disabled={busy || secretAccessKey.length > 0}
+                disabled={busy || savedSecret.loading || Boolean(secretDraft?.length)}
               />
             )}
           </Field>
@@ -277,7 +307,11 @@ export function CloudBackupPanel({
       </FieldGroup>
 
       <div className="flex flex-wrap gap-2 border-t pt-4">
-        <Button type="button" onClick={() => void saveSettings()} disabled={busy || !settingsDirty}>
+        <Button
+          type="button"
+          onClick={() => void saveSettings()}
+          disabled={busy || savedSecret.loading || !settingsDirty}
+        >
           {pendingKey === 'cloud:settings' ? (
             <Spinner aria-hidden="true" />
           ) : (
@@ -289,7 +323,7 @@ export function CloudBackupPanel({
           type="button"
           variant="outline"
           onClick={() => onTest(buildSettingsInput())}
-          disabled={busy || !enabled}
+          disabled={busy || savedSecret.loading || !enabled}
         >
           {pendingKey === 'cloud:test' ? (
             <Spinner aria-hidden="true" />
@@ -307,34 +341,24 @@ export function CloudBackupPanel({
         </AlertDescription>
       </Alert>
 
-      <Field data-invalid={passwordInvalid}>
+      <Field
+        data-invalid={passwordInvalid}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) savePassword()
+        }}
+      >
         <FieldLabel htmlFor="cloud-backup-password">云端备份密码</FieldLabel>
-        <div className="relative">
-          <Input
-            id="cloud-backup-password"
-            type={showPassword ? 'text' : 'password'}
-            value={password}
-            onChange={(event) => changePassword(event.target.value)}
-            onBlur={savePassword}
-            maxLength={256}
-            placeholder="至少 8 个字符"
-            disabled={busy}
-            className="pr-10"
-            aria-invalid={passwordInvalid}
-            aria-describedby={`cloud-backup-password-description${passwordInvalid ? ' cloud-backup-password-error' : ''}`}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="absolute right-1 top-1/2 -translate-y-1/2"
-            onClick={() => setShowPassword((value) => !value)}
-            disabled={busy}
-            aria-label={showPassword ? '隐藏备份密码' : '显示备份密码'}
-          >
-            {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
-          </Button>
-        </div>
+        <PasswordInput
+          id="cloud-backup-password"
+          label="备份密码"
+          value={password}
+          onChange={(event) => changePassword(event.target.value)}
+          maxLength={256}
+          placeholder="至少 8 个字符"
+          disabled={busy}
+          aria-invalid={passwordInvalid}
+          aria-describedby={`cloud-backup-password-description${passwordInvalid ? ' cloud-backup-password-error' : ''}`}
+        />
         <FieldDescription id="cloud-backup-password-description">
           输入完成后会自动保存到本机明文设置中；清空输入框可移除已保存的密码。密码不会随备份上传。
         </FieldDescription>

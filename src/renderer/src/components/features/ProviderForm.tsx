@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, ArrowLeft, ChevronDown, Eye, EyeOff, Info } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { AlertCircle, ArrowLeft, ChevronDown, Info, RefreshCw } from 'lucide-react'
 import type { AppSnapshot, ProviderSummary, ToolId } from '@shared/ipc'
 import { nativeModel, type HeaderInput, type ProviderConfigurations } from '@shared/configuration'
 import { ModelPresetEditor } from './ModelPresetEditor'
@@ -7,6 +7,8 @@ import { createModelPreset } from '@renderer/lib/provider-form'
 import { ConnectionOptionsEditor } from './ConnectionOptionsEditor'
 import { ConfigPreview } from './ConfigPreview'
 import { ToolIcon } from '@renderer/components/ToolIcon'
+import { PasswordInput } from '@renderer/components/PasswordInput'
+import { useStoredSecrets } from '@renderer/hooks/use-stored-secrets'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import { Button } from '@renderer/components/ui/button'
 import { Card, CardContent, CardHeader } from '@renderer/components/ui/card'
@@ -19,12 +21,6 @@ import {
   FieldLabel,
   FieldSet
 } from '@renderer/components/ui/field'
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput
-} from '@renderer/components/ui/input-group'
 import { Spinner } from '@renderer/components/ui/spinner'
 
 interface ProviderFormProps {
@@ -39,7 +35,7 @@ interface ProviderFormProps {
 interface ProviderFormState {
   name: string
   baseUrl: string
-  apiKey: string
+  apiKey: string | null
 }
 
 export function ProviderForm({
@@ -54,7 +50,7 @@ export function ProviderForm({
   const [form, setForm] = useState<ProviderFormState>(() => ({
     name: provider?.name ?? '',
     baseUrl: provider?.baseUrl ?? '',
-    apiKey: ''
+    apiKey: null
   }))
   const [configurations, setConfigurations] = useState<ProviderConfigurations<HeaderInput>>(() => {
     if (provider)
@@ -82,11 +78,16 @@ export function ProviderForm({
   })
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState<string | null>(null)
-  const [showApiKey, setShowApiKey] = useState(false)
-  const [savedApiKey, setSavedApiKey] = useState<string | null>(null)
-  const [loadingApiKey, setLoadingApiKey] = useState(false)
-  const [apiKeyReadError, setApiKeyReadError] = useState<string | null>(null)
-  const apiKeyError = fieldErrors.apiKey ?? apiKeyReadError
+  const providerId = provider?.id
+  const readSecrets = useCallback(
+    () => window.api.getProviderSecrets({ id: providerId! }),
+    [providerId]
+  )
+  const secrets = useStoredSecrets(
+    readSecrets,
+    Boolean(providerId),
+    '无法读取已保存的 API Key 和请求头值，请重试或重新打开应用。'
+  )
   const [pending, setPending] = useState(false)
   const configuration = configurations[toolId]!
   const modelId =
@@ -100,7 +101,7 @@ export function ProviderForm({
 
   async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
-    if (pending) return
+    if (pending || secrets.loading) return
     const tools = provider?.tools ?? [toolId]
 
     setPending(true)
@@ -120,7 +121,7 @@ export function ProviderForm({
         : await window.api.createProvider({
             name: form.name,
             baseUrl: form.baseUrl,
-            apiKey: form.apiKey,
+            apiKey: form.apiKey ?? '',
             tools,
             configurations
           })
@@ -145,33 +146,6 @@ export function ProviderForm({
 
   function updateForm(key: keyof ProviderFormState, value: string): void {
     setForm((current) => ({ ...current, [key]: value }))
-  }
-
-  async function toggleApiKeyVisibility(): Promise<void> {
-    if (pending || loadingApiKey) return
-    if (showApiKey) {
-      setShowApiKey(false)
-      return
-    }
-    if (form.apiKey || savedApiKey !== null || !provider?.hasApiKey) {
-      setShowApiKey(true)
-      return
-    }
-    setLoadingApiKey(true)
-    setApiKeyReadError(null)
-    try {
-      const result = await window.api.revealProviderApiKey({ id: provider.id })
-      if (!result.ok) {
-        setApiKeyReadError(result.error.message)
-        return
-      }
-      setSavedApiKey(result.value)
-      setShowApiKey(true)
-    } catch {
-      setApiKeyReadError('无法读取已保存的 API Key，请重新打开应用后重试。')
-    } finally {
-      setLoadingApiKey(false)
-    }
   }
 
   return (
@@ -204,6 +178,24 @@ export function ProviderForm({
               <Alert variant="destructive" className="px-4 py-3">
                 <AlertCircle aria-hidden="true" />
                 <AlertDescription>{formError}</AlertDescription>
+              </Alert>
+            )}
+            {secrets.error && (
+              <Alert variant="destructive">
+                <AlertCircle aria-hidden="true" />
+                <AlertDescription>
+                  {secrets.error}
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="h-auto justify-start p-0"
+                    onClick={secrets.reload}
+                    disabled={pending}
+                  >
+                    <RefreshCw aria-hidden="true" />
+                    重新读取密钥
+                  </Button>
+                </AlertDescription>
               </Alert>
             )}
             {provider && provider.tools.length > 1 && (
@@ -254,58 +246,33 @@ export function ProviderForm({
 
                 <FormField
                   label="API Key"
-                  error={apiKeyError}
+                  error={fieldErrors.apiKey}
                   htmlFor="provider-key"
                   hint={
                     provider?.hasApiKey
-                      ? '已保存的密钥默认隐藏，点击右侧眼睛查看完整内容；留空可保留。'
+                      ? '已保存的密钥会自动载入并默认隐藏，可直接编辑；点击右侧眼睛查看，留空保留原值。'
                       : provider
                         ? '当前没有保存密钥，请输入 API Key。'
                         : '密钥保存在本机应用数据目录中，上传云端时会使用备份密码整体加密。'
                   }
                 >
-                  <InputGroup>
-                    <InputGroupInput
-                      id="provider-key"
-                      type={showApiKey ? 'text' : 'password'}
-                      value={form.apiKey || savedApiKey || ''}
-                      onChange={(event) => {
-                        setSavedApiKey(null)
-                        setApiKeyReadError(null)
-                        updateForm('apiKey', event.target.value)
-                      }}
-                      placeholder={provider?.hasApiKey ? '••••••••' : '输入 API Key'}
-                      disabled={loadingApiKey}
-                      aria-invalid={Boolean(apiKeyError)}
-                      aria-describedby={`provider-key-hint${apiKeyError ? ' provider-key-error' : ''}`}
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                    <InputGroupAddon align="inline-end">
-                      <InputGroupButton
-                        size="icon-sm"
-                        onClick={() => void toggleApiKeyVisibility()}
-                        disabled={loadingApiKey}
-                        aria-label={
-                          loadingApiKey
-                            ? '正在读取 API Key'
-                            : showApiKey
-                              ? '隐藏 API Key'
-                              : '显示 API Key'
-                        }
-                        aria-busy={loadingApiKey}
-                        aria-pressed={showApiKey}
-                      >
-                        {loadingApiKey ? (
-                          <Spinner aria-hidden="true" />
-                        ) : showApiKey ? (
-                          <EyeOff aria-hidden="true" />
-                        ) : (
-                          <Eye aria-hidden="true" />
-                        )}
-                      </InputGroupButton>
-                    </InputGroupAddon>
-                  </InputGroup>
+                  <PasswordInput
+                    id="provider-key"
+                    label="API Key"
+                    value={form.apiKey ?? secrets.value?.apiKey ?? ''}
+                    onChange={(event) => updateForm('apiKey', event.target.value)}
+                    placeholder={
+                      secrets.loading
+                        ? '正在读取 API Key…'
+                        : provider?.hasApiKey
+                          ? '留空保留已保存的 API Key'
+                          : '输入 API Key'
+                    }
+                    loading={secrets.loading}
+                    disabled={pending}
+                    aria-invalid={Boolean(fieldErrors.apiKey)}
+                    aria-describedby={`provider-key-hint${fieldErrors.apiKey ? ' provider-key-error' : ''}`}
+                  />
                 </FormField>
 
                 <ModelPresetEditor
@@ -333,6 +300,8 @@ export function ProviderForm({
                       toolId={toolId}
                       configuration={configurations[toolId]!}
                       savedHeaders={provider?.configurations[toolId]?.headers}
+                      savedValues={secrets.value?.headers[toolId]}
+                      loadingSecrets={secrets.loading}
                       onChange={(value) =>
                         setConfigurations((current) => ({ ...current, [toolId]: value }))
                       }
@@ -378,7 +347,7 @@ export function ProviderForm({
                 <Button type="button" variant="outline" onClick={onCancel} disabled={pending}>
                   取消
                 </Button>
-                <Button type="submit" disabled={pending}>
+                <Button type="submit" disabled={pending || secrets.loading}>
                   {pending && <Spinner aria-hidden="true" />}
                   {pending ? '正在保存…' : '保存供应商'}
                 </Button>

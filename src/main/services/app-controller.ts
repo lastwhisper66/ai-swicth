@@ -20,7 +20,8 @@ import type {
   OpenToolLocationInput,
   PickToolPathInput,
   ResetToolPathInput,
-  RevealProviderApiKeyInput,
+  GetProviderSecretsInput,
+  ProviderSecrets,
   RestoreBackupInput,
   RestoreResult,
   SetToolPathInput,
@@ -75,6 +76,12 @@ export class AppController {
       await this.appSettings.setCloudBackup(input)
       return this.getSnapshot()
     })
+  }
+
+  async getCloudBackupSecret(): Promise<string> {
+    return this.withMutation(
+      async () => this.appSettings.getCloudBackupCredentials().secretAccessKey
+    )
   }
 
   async testCloudBackup(input: CloudBackupSettingsInput): Promise<CloudBackupConnectionResult> {
@@ -133,8 +140,19 @@ export class AppController {
     })
   }
 
-  async revealProviderApiKey(input: RevealProviderApiKeyInput): Promise<string> {
-    return this.withMutation(async () => (await this.providerStore.getResolved(input.id)).apiKey)
+  async getProviderSecrets(input: GetProviderSecretsInput): Promise<ProviderSecrets> {
+    return this.withMutation(async () => {
+      const provider = await this.providerStore.getResolved(input.id)
+      return {
+        apiKey: provider.apiKey,
+        headers: Object.fromEntries(
+          Object.entries(provider.configurations).map(([toolId, configuration]) => [
+            toolId,
+            configuration.headers
+          ])
+        )
+      }
+    })
   }
 
   async getToolPickerDirectory(input: PickToolPathInput): Promise<string> {

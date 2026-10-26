@@ -18,7 +18,7 @@ import {
   type PickToolPathInput,
   type OpenToolLocationInput,
   type ResetToolPathInput,
-  type RevealProviderApiKeyInput,
+  type GetProviderSecretsInput,
   type RestoreBackupInput,
   type SetNativeThemeInput,
   type SetToolPathInput,
@@ -43,6 +43,39 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
   registerBusinessHandler(IPC_CHANNELS.getSnapshot, rendererUrl, expectNoArguments, () =>
     controller.getSnapshot(true)
   )
+  registerBusinessHandler(
+    IPC_CHANNELS.getWindowState,
+    rendererUrl,
+    expectNoArguments,
+    async (_input, event) => ({ isMaximized: getSenderWindow(event).isMaximized() })
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.minimizeWindow,
+    rendererUrl,
+    expectNoArguments,
+    async (_input, event) => {
+      getSenderWindow(event).minimize()
+    }
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.toggleMaximizeWindow,
+    rendererUrl,
+    expectNoArguments,
+    async (_input, event) => {
+      const window = getSenderWindow(event)
+      if (window.isMaximized()) window.unmaximize()
+      else window.maximize()
+      return { isMaximized: window.isMaximized() }
+    }
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.closeWindow,
+    rendererUrl,
+    expectNoArguments,
+    async (_input, event) => {
+      getSenderWindow(event).close()
+    }
+  )
   registerBusinessHandler(IPC_CHANNELS.setAppSettings, rendererUrl, parseAppSettings, (input) =>
     controller.setAppSettings(input)
   )
@@ -51,6 +84,9 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
     rendererUrl,
     parseCloudBackupSettings,
     (input) => controller.setCloudBackupSettings(input)
+  )
+  registerBusinessHandler(IPC_CHANNELS.getCloudBackupSecret, rendererUrl, expectNoArguments, () =>
+    controller.getCloudBackupSecret()
   )
   registerBusinessHandler(
     IPC_CHANNELS.testCloudBackup,
@@ -91,10 +127,10 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
     controller.updateProvider(input)
   )
   registerBusinessHandler(
-    IPC_CHANNELS.revealProviderApiKey,
+    IPC_CHANNELS.getProviderSecrets,
     rendererUrl,
-    parseRevealProviderApiKey,
-    (input) => controller.revealProviderApiKey(input)
+    parseGetProviderSecrets,
+    (input) => controller.getProviderSecrets(input)
   )
   registerBusinessHandler(IPC_CHANNELS.deleteProvider, rendererUrl, parseDeleteProvider, (input) =>
     controller.deleteProvider(input)
@@ -188,6 +224,14 @@ function assertTrustedEvent(event: IpcMainInvokeEvent, rendererUrl: string): voi
   }
 }
 
+function getSenderWindow(event: IpcMainInvokeEvent): BrowserWindow {
+  const window = BrowserWindow.fromWebContents(event.sender)
+  if (!window || window.isDestroyed()) {
+    throw new AppError('INVALID_INPUT', '无法识别应用窗口，请重新打开应用。')
+  }
+  return window
+}
+
 function expectNoArguments(args: unknown[]): undefined {
   if (args.length !== 0) throw invalidRequest()
   return undefined
@@ -275,7 +319,7 @@ function parseDeleteProvider(args: unknown[]): DeleteProviderInput {
   return { id: expectIdentifier(input.id) }
 }
 
-function parseRevealProviderApiKey(args: unknown[]): RevealProviderApiKeyInput {
+function parseGetProviderSecrets(args: unknown[]): GetProviderSecretsInput {
   const input = expectRecordArgument(args)
   return { id: expectIdentifier(input.id) }
 }
