@@ -1,14 +1,4 @@
-import { useState } from 'react'
-import {
-  FileText,
-  FolderInput,
-  FolderOpen,
-  HardDrive,
-  Pencil,
-  RotateCcw,
-  Save,
-  Undo2
-} from 'lucide-react'
+import { FileText, FolderInput, FolderOpen, HardDrive, RotateCcw, Undo2 } from 'lucide-react'
 import type {
   BackupSummary,
   CloudBackupSettings,
@@ -31,7 +21,6 @@ import {
 } from '@renderer/components/ui/alert-dialog'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
-import { Input } from '@renderer/components/ui/input'
 import {
   Empty,
   EmptyDescription,
@@ -39,7 +28,6 @@ import {
   EmptyMedia,
   EmptyTitle
 } from '@renderer/components/ui/empty'
-import { Field, FieldDescription, FieldLabel } from '@renderer/components/ui/field'
 import {
   Item,
   ItemActions,
@@ -61,14 +49,13 @@ interface SettingsBackupsProps {
   cloudBackup: CloudBackupSettings
   pendingKey: string | null
   busy: boolean
-  onSavePath: (toolId: ToolId, path: string) => void
   onPickPath: (toolId: ToolId) => void
   onResetPath: (toolId: ToolId) => void
   onOpenLocation: (input: OpenToolLocationInput) => void
   onRestore: (backupId: string) => void
-  onSaveCloudBackup: (input: CloudBackupSettingsInput) => void
-  onSaveCloudBackupPassword: (password: string) => void
-  onTestCloudBackup: () => void
+  onSaveCloudBackup: (input: CloudBackupSettingsInput) => Promise<boolean>
+  onSaveCloudBackupPassword: (password: string) => Promise<boolean>
+  onTestCloudBackup: (input: CloudBackupSettingsInput) => void
   onUploadCloudBackup: (password: string) => void
   onRestoreCloudBackup: (password: string) => void
 }
@@ -85,7 +72,6 @@ export function SettingsBackups({
   cloudBackup,
   pendingKey,
   busy,
-  onSavePath,
   onPickPath,
   onResetPath,
   onOpenLocation,
@@ -112,9 +98,7 @@ export function SettingsBackups({
                 key={`${toolId}:${tools[toolId].directory}`}
                 toolId={toolId}
                 status={tools[toolId]}
-                pending={pendingKey === `path:${toolId}:save`}
                 busy={busy}
-                onSave={onSavePath}
                 onPick={onPickPath}
                 onReset={onResetPath}
                 onOpenLocation={onOpenLocation}
@@ -180,29 +164,22 @@ export function SettingsBackups({
 function ToolPathEditor({
   toolId,
   status,
-  pending,
   busy,
-  onSave,
   onPick,
   onReset,
   onOpenLocation
 }: {
   toolId: ToolId
   status: ToolStatus
-  pending: boolean
   busy: boolean
-  onSave: (toolId: ToolId, path: string) => void
   onPick: (toolId: ToolId) => void
   onReset: (toolId: ToolId) => void
   onOpenLocation: (input: OpenToolLocationInput) => void
 }): React.JSX.Element {
-  const [path, setPath] = useState(status.directory)
-  const [editing, setEditing] = useState(false)
   const showLocation =
     status.installation.state === 'installed' ||
     status.fileState !== 'missing' ||
-    status.pathSource !== 'default' ||
-    editing
+    status.pathSource !== 'default'
 
   return (
     <Item role="listitem" className="grid min-w-0 gap-4 rounded-none border-0 p-4">
@@ -224,50 +201,14 @@ function ToolPathEditor({
       <ToolInstallationStatus installation={status.installation} showPath />
       {showLocation ? (
         <div className="grid min-w-0 gap-4 rounded-lg bg-muted/35 p-3">
-          {editing ? (
-            <Field className="min-w-0 gap-2">
-              <FieldLabel htmlFor={`${toolId}-path`}>配置目录</FieldLabel>
-              <Input
-                id={`${toolId}-path`}
-                value={path}
-                onChange={(event) => setPath(event.target.value)}
-                className="font-mono text-xs"
-                disabled={busy}
-                aria-describedby={`${toolId}-path-hint`}
-                autoFocus
-              />
-              <FieldDescription id={`${toolId}-path-hint`}>
-                输入已存在目录的绝对路径，保存后生效。
-              </FieldDescription>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  onClick={() => onSave(toolId, path)}
-                  disabled={busy || path === status.directory}
-                >
-                  {pending ? <Spinner aria-hidden="true" /> : <Save aria-hidden="true" />}
-                  保存路径
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setEditing(false)}
-                  disabled={busy}
-                >
-                  取消
-                </Button>
-              </div>
-            </Field>
-          ) : (
-            <ConfigLocation
-              label="配置目录"
-              path={status.directory}
-              toolName={toolNames[toolId]}
-              target="directory"
-              busy={busy}
-              onOpen={() => onOpenLocation({ toolId, target: 'directory' })}
-            />
-          )}
+          <ConfigLocation
+            label="配置目录"
+            path={status.directory}
+            toolName={toolNames[toolId]}
+            target="directory"
+            busy={busy}
+            onOpen={() => onOpenLocation({ toolId, target: 'directory' })}
+          />
           <ConfigLocation
             label="配置文件"
             path={status.path}
@@ -279,7 +220,7 @@ function ToolPathEditor({
         </div>
       ) : (
         <p className="rounded-lg bg-muted/35 p-3 text-xs leading-5 text-muted-foreground">
-          尚未确认工具安装，暂不展示推测的默认配置路径。请安装后刷新，或手动选择已有配置目录。
+          尚未确认工具安装，暂不展示推测的默认配置路径。请安装后刷新。
         </p>
       )}
       <ItemActions className="flex-wrap">
@@ -294,33 +235,30 @@ function ToolPathEditor({
           <FolderInput aria-hidden="true" />
           更换目录
         </Button>
-        {!editing && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setPath(status.directory)
-              setEditing(true)
-            }}
-            disabled={busy}
-            aria-label={`手动输入 ${toolNames[toolId]} 配置目录`}
-          >
-            <Pencil aria-hidden="true" />
-            手动输入
-          </Button>
-        )}
         {status.pathSource === 'custom' && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => onReset(toolId)}
-            disabled={busy}
-          >
-            <RotateCcw aria-hidden="true" />
-            移除自定义
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button type="button" variant="ghost" size="sm" disabled={busy}>
+                <RotateCcw aria-hidden="true" />
+                移除自定义
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogMedia>
+                  <RotateCcw aria-hidden="true" />
+                </AlertDialogMedia>
+                <AlertDialogTitle>移除 {toolNames[toolId]} 自定义路径？</AlertDialogTitle>
+                <AlertDialogDescription>
+                  将停止使用当前自定义目录，并重新采用环境变量或工具默认目录。工具配置文件不会被删除。
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>取消</AlertDialogCancel>
+                <AlertDialogAction onClick={() => onReset(toolId)}>确认移除</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         )}
       </ItemActions>
       <div className="min-w-0 space-y-3 border-t pt-3">

@@ -325,7 +325,9 @@ export interface DesktopApi {
   setAppSettings: (input: AppSettingsInput) => Promise<ApiResult<AppSnapshot>>
   setCloudBackupSettings: (input: CloudBackupSettingsInput) => Promise<ApiResult<AppSnapshot>>
   setCloudBackupPassword: (input: CloudBackupOperationInput) => Promise<ApiResult<AppSnapshot>>
-  testCloudBackup: () => Promise<ApiResult<CloudBackupConnectionResult>>
+  testCloudBackup: (
+    input: CloudBackupSettingsInput
+  ) => Promise<ApiResult<CloudBackupConnectionResult>>
   uploadCloudBackup: (
     input: CloudBackupOperationInput
   ) => Promise<ApiResult<OperationResponse<CloudBackupOperationResult>>>

@@ -15,7 +15,13 @@ import {
   AlertDialogTrigger
 } from '@renderer/components/ui/alert-dialog'
 import { Button } from '@renderer/components/ui/button'
-import { Field, FieldDescription, FieldGroup, FieldLabel } from '@renderer/components/ui/field'
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel
+} from '@renderer/components/ui/field'
 import { Input } from '@renderer/components/ui/input'
 import {
   Select,
@@ -31,9 +37,9 @@ interface CloudBackupPanelProps {
   settings: CloudBackupSettings
   busy: boolean
   pendingKey: string | null
-  onSave: (input: CloudBackupSettingsInput) => void
-  onSavePassword: (password: string) => void
-  onTest: () => void
+  onSave: (input: CloudBackupSettingsInput) => Promise<boolean>
+  onSavePassword: (password: string) => Promise<boolean>
+  onTest: (input: CloudBackupSettingsInput) => void
   onUpload: (password: string) => void
   onRestore: (password: string) => void
 }
@@ -63,29 +69,25 @@ export function CloudBackupPanel({
   const [showPassword, setShowPassword] = useState(false)
   const passwordSaveTimer = useRef<number | undefined>(undefined)
 
-  useEffect(() => () => window.clearTimeout(passwordSaveTimer.current), [])
-
+  const settingsDirty =
+    enabled !== settings.enabled ||
+    endpoint.trim() !== settings.endpoint ||
+    region.trim() !== settings.region ||
+    bucket.trim() !== settings.bucket ||
+    prefix.trim() !== settings.prefix ||
+    retentionCount !== settings.retentionCount ||
+    accessKeyId.trim() !== settings.accessKeyId ||
+    secretAccessKey.length > 0 ||
+    clearSecret
   const passwordValid = isValidPassword(password)
-  const canOperate = passwordValid && !busy
+  const passwordInvalid = password.length > 0 && !passwordValid
+  const canOperate = settings.enabled && !settingsDirty && passwordValid && !busy
   const secretLabel = settings.hasSecret ? `已保存 ${settings.maskedSecret}` : '尚未保存'
 
-  function changePassword(value: string): void {
-    setPasswordDraft(value)
-    window.clearTimeout(passwordSaveTimer.current)
-    if (isValidPassword(value) || value.length === 0) {
-      passwordSaveTimer.current = window.setTimeout(() => onSavePassword(value), 400)
-    }
-  }
+  useEffect(() => () => window.clearTimeout(passwordSaveTimer.current), [])
 
-  function savePassword(): void {
-    window.clearTimeout(passwordSaveTimer.current)
-    if (passwordDraft !== null && (passwordValid || password.length === 0)) {
-      onSavePassword(password)
-    }
-  }
-
-  function saveSettings(): void {
-    onSave({
+  function buildSettingsInput(): CloudBackupSettingsInput {
+    return {
       enabled,
       endpoint,
       region,
@@ -99,7 +101,34 @@ export function CloudBackupPanel({
           : clearSecret
             ? { mode: 'clear' }
             : { mode: 'keep' }
-    })
+    }
+  }
+
+  async function persistPassword(value: string): Promise<void> {
+    const saved = await onSavePassword(value)
+    if (saved) setPasswordDraft((current) => (current === value ? null : current))
+  }
+
+  function changePassword(value: string): void {
+    setPasswordDraft(value)
+    window.clearTimeout(passwordSaveTimer.current)
+    if (isValidPassword(value) || value.length === 0) {
+      passwordSaveTimer.current = window.setTimeout(() => void persistPassword(value), 400)
+    }
+  }
+
+  function savePassword(): void {
+    window.clearTimeout(passwordSaveTimer.current)
+    if (passwordDraft !== null && (passwordValid || password.length === 0)) {
+      void persistPassword(password)
+    }
+  }
+
+  async function saveSettings(): Promise<void> {
+    if (await onSave(buildSettingsInput())) {
+      setSecretAccessKey('')
+      setClearSecret(false)
+    }
   }
 
   return (
@@ -135,8 +164,9 @@ export function CloudBackupPanel({
               onChange={(event) => setEndpoint(event.target.value)}
               placeholder="https://s3.amazonaws.com"
               disabled={busy}
+              aria-describedby="cloud-endpoint-description"
             />
-            <FieldDescription>
+            <FieldDescription id="cloud-endpoint-description">
               AWS 留空；R2 使用 https://&lt;accountid&gt;.r2.cloudflarestorage.com。
             </FieldDescription>
           </Field>
@@ -167,8 +197,11 @@ export function CloudBackupPanel({
               onChange={(event) => setPrefix(event.target.value)}
               placeholder="ai-switch"
               disabled={busy}
+              aria-describedby="cloud-prefix-description"
             />
-            <FieldDescription>每份备份保存为一个带时间戳的加密文件。</FieldDescription>
+            <FieldDescription id="cloud-prefix-description">
+              每份备份保存为一个带时间戳的加密文件。
+            </FieldDescription>
           </Field>
           <Field>
             <FieldLabel htmlFor="cloud-retention-count">云端备份保留数量</FieldLabel>
@@ -177,7 +210,11 @@ export function CloudBackupPanel({
               onValueChange={(value) => setRetentionCount(Number(value))}
               disabled={busy}
             >
-              <SelectTrigger id="cloud-retention-count" className="w-full">
+              <SelectTrigger
+                id="cloud-retention-count"
+                className="w-full"
+                aria-describedby="cloud-retention-description"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -188,7 +225,7 @@ export function CloudBackupPanel({
                 ))}
               </SelectContent>
             </Select>
-            <FieldDescription>
+            <FieldDescription id="cloud-retention-description">
               下次上传成功后，按云端文件时间戳从旧到新清理，只保留指定数量的最新备份。
             </FieldDescription>
           </Field>
@@ -240,7 +277,7 @@ export function CloudBackupPanel({
       </FieldGroup>
 
       <div className="flex flex-wrap gap-2 border-t pt-4">
-        <Button type="button" onClick={saveSettings} disabled={busy}>
+        <Button type="button" onClick={() => void saveSettings()} disabled={busy || !settingsDirty}>
           {pendingKey === 'cloud:settings' ? (
             <Spinner aria-hidden="true" />
           ) : (
@@ -248,7 +285,12 @@ export function CloudBackupPanel({
           )}
           保存云端设置
         </Button>
-        <Button type="button" variant="outline" onClick={onTest} disabled={busy}>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => onTest(buildSettingsInput())}
+          disabled={busy || !enabled}
+        >
           {pendingKey === 'cloud:test' ? (
             <Spinner aria-hidden="true" />
           ) : (
@@ -258,14 +300,14 @@ export function CloudBackupPanel({
         </Button>
       </div>
 
-      <Alert>
+      <Alert role="note">
         <Cloud aria-hidden="true" />
         <AlertDescription>
           云端对象只保存经过备份密码加密的内容。密码保存在本机，切换页面或重启后自动填入；换机器恢复时仍需输入相同密码。
         </AlertDescription>
       </Alert>
 
-      <Field>
+      <Field data-invalid={passwordInvalid}>
         <FieldLabel htmlFor="cloud-backup-password">云端备份密码</FieldLabel>
         <div className="relative">
           <Input
@@ -278,6 +320,8 @@ export function CloudBackupPanel({
             placeholder="至少 8 个字符"
             disabled={busy}
             className="pr-10"
+            aria-invalid={passwordInvalid}
+            aria-describedby={`cloud-backup-password-description${passwordInvalid ? ' cloud-backup-password-error' : ''}`}
           />
           <Button
             type="button"
@@ -291,9 +335,14 @@ export function CloudBackupPanel({
             {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
           </Button>
         </div>
-        <FieldDescription>
+        <FieldDescription id="cloud-backup-password-description">
           输入完成后会自动保存到本机明文设置中；清空输入框可移除已保存的密码。密码不会随备份上传。
         </FieldDescription>
+        {passwordInvalid && (
+          <FieldError id="cloud-backup-password-error">
+            备份密码应为 8 到 256 个字符，且不能包含换行。
+          </FieldError>
+        )}
       </Field>
 
       <div className="flex flex-wrap gap-2">

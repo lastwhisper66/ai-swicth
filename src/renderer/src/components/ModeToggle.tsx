@@ -17,7 +17,8 @@ export function ModeToggle(): React.JSX.Element {
     <Button
       type="button"
       variant="ghost"
-      size="icon-sm"
+      size="icon-lg"
+      className="size-10"
       onClick={() => setTheme(next)}
       aria-label={description}
       title={description}

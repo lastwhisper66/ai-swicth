@@ -36,16 +36,15 @@ interface SettingsPageProps {
   onAddProvider: (toolId: ToolId) => void
   onEditProvider: (provider: ProviderSummary, toolId: ToolId) => void
   onDeleteProvider: (providerId: string) => void
-  onSavePath: (toolId: ToolId, path: string) => void
   onPickPath: (toolId: ToolId) => void
   onResetPath: (toolId: ToolId) => void
   onOpenLocation: (input: OpenToolLocationInput) => void
   onRestore: (backupId: string) => void
   onPendingChange: (pending: boolean) => void
   onCommonSaved: (snapshot: AppSnapshot, message: string) => void
-  onSaveCloudBackup: (input: CloudBackupSettingsInput) => void
-  onSaveCloudBackupPassword: (password: string) => void
-  onTestCloudBackup: () => void
+  onSaveCloudBackup: (input: CloudBackupSettingsInput) => Promise<boolean>
+  onSaveCloudBackupPassword: (password: string) => Promise<boolean>
+  onTestCloudBackup: (input: CloudBackupSettingsInput) => void
   onUploadCloudBackup: (password: string) => void
   onRestoreCloudBackup: (password: string) => void
 }
@@ -90,7 +89,6 @@ export function SettingsPage({
   onAddProvider,
   onEditProvider,
   onDeleteProvider,
-  onSavePath,
   onPickPath,
   onResetPath,
   onOpenLocation,
@@ -104,26 +102,30 @@ export function SettingsPage({
   onRestoreCloudBackup
 }: SettingsPageProps): React.JSX.Element {
   return (
-    <div className="grid gap-6 lg:grid-cols-[14rem_minmax(0,1fr)]">
-      <aside className="space-y-2">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[14rem_minmax(0,1fr)]">
+      <aside className="min-w-0 space-y-2 lg:sticky lg:top-8 lg:self-start">
         <div className="px-2 pb-1">
           <h2 className="font-semibold">设置</h2>
           <p className="mt-1 text-xs text-muted-foreground">管理应用与本地配置</p>
         </div>
-        <nav className="flex gap-2 overflow-x-auto lg:block lg:space-y-1" aria-label="设置分类">
+        <nav
+          className="flex min-w-0 max-w-full gap-2 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-visible lg:pb-0"
+          aria-label="设置分类"
+        >
           {items.map(({ id, label, description, Icon }) => (
             <Button
               key={id}
               type="button"
               variant={section === id ? 'secondary' : 'ghost'}
-              className="h-auto min-w-max justify-start gap-3 px-3 py-2.5 text-left lg:w-full"
+              className="h-10 min-w-max justify-start gap-2 px-3 py-2 text-left lg:h-auto lg:w-full lg:min-w-0 lg:gap-3 lg:py-2.5"
               disabled={busy}
               onClick={() => onSectionChange(id)}
+              aria-current={section === id ? 'page' : undefined}
             >
               <Icon className="size-4 shrink-0" aria-hidden="true" />
               <span>
                 <span className="block text-sm">{label}</span>
-                <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+                <span className="mt-0.5 hidden text-xs font-normal text-muted-foreground lg:block">
                   {description}
                 </span>
               </span>
@@ -167,7 +169,6 @@ export function SettingsPage({
             cloudBackup={cloudBackup}
             pendingKey={pendingKey}
             busy={busy}
-            onSavePath={onSavePath}
             onPickPath={onPickPath}
             onResetPath={onResetPath}
             onOpenLocation={onOpenLocation}

@@ -4,9 +4,10 @@ import { ToolIcon } from '@renderer/components/ToolIcon'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@renderer/components/ui/card'
+import { Card, CardContent, CardHeader } from '@renderer/components/ui/card'
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -62,14 +63,16 @@ export function ToolConfigPage({
             </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <CardTitle className="text-lg">{details.name}</CardTitle>
+                <h2 className="text-lg font-semibold">{details.name}</h2>
                 <InstallationBadge installation={status.installation} />
                 <StatusBadge status={status} />
               </div>
               <p className="mt-1 text-sm text-muted-foreground">{details.description}</p>
-              <div className="mt-2">
-                <ToolInstallationStatus installation={status.installation} />
-              </div>
+              {status.installation.state !== 'installed' && (
+                <div className="mt-2">
+                  <ToolInstallationStatus installation={status.installation} />
+                </div>
+              )}
             </div>
           </div>
         </CardHeader>
@@ -110,10 +113,12 @@ export function ToolConfigPage({
               点击“应用”切换 {details.name} 使用的供应商。
             </p>
           </div>
-          <Button onClick={() => onAdd(toolId)} disabled={busy}>
-            <Plus aria-hidden="true" />
-            添加供应商
-          </Button>
+          {compatibleProviders.length > 0 && (
+            <Button onClick={() => onAdd(toolId)} disabled={busy}>
+              <Plus aria-hidden="true" />
+              添加供应商
+            </Button>
+          )}
         </div>
 
         {compatibleProviders.length === 0 ? (
@@ -123,8 +128,14 @@ export function ToolConfigPage({
                 <ToolIcon toolId={toolId} />
               </EmptyMedia>
               <EmptyTitle>尚无适用于 {details.name} 的供应商</EmptyTitle>
-              <EmptyDescription>点击“添加供应商”开始配置。</EmptyDescription>
+              <EmptyDescription>添加连接信息和模型预设后，即可在这里应用。</EmptyDescription>
             </EmptyHeader>
+            <EmptyContent>
+              <Button onClick={() => onAdd(toolId)} disabled={busy}>
+                <Plus aria-hidden="true" />
+                添加供应商
+              </Button>
+            </EmptyContent>
           </Empty>
         ) : (
           <ul

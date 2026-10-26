@@ -72,7 +72,7 @@ function PreviewContent({
           {input.providerId || input.draft
             ? '当前模型配置：合并供应商草稿与已保存的共通配置，应用后写入文件。'
             : '当前文件：展示所选配置目录中实际保存的内容。'}
-          密钥已脱敏，内容只读。
+          API Key 已脱敏，内容只读。
         </p>
         <Button
           type="button"
@@ -111,7 +111,7 @@ function PreviewContent({
               value={file.content}
               wrap="off"
               spellCheck={false}
-              className="h-72 w-full resize-y [field-sizing:fixed] bg-background font-mono text-xs leading-6"
+              className="h-72 w-full resize-y field-sizing-fixed bg-background font-mono text-xs leading-6"
             />
           )}
         </div>

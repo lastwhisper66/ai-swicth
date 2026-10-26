@@ -10,7 +10,8 @@ import {
 import type {
   CloudBackupConnectionResult,
   CloudBackupOperationResult,
-  CloudBackupSettings
+  CloudBackupSettings,
+  CloudBackupSettingsInput
 } from '@shared/ipc'
 import { TOOL_IDS, type ToolId } from '@shared/ipc'
 import { parseConfiguration, type ManagedState } from '@shared/configuration'
@@ -56,8 +57,8 @@ export class CloudBackupService {
     private readonly managedStates: ManagedStateStore
   ) {}
 
-  async testConnection(): Promise<CloudBackupConnectionResult> {
-    const { client, settings } = this.getClient()
+  async testConnection(input: CloudBackupSettingsInput): Promise<CloudBackupConnectionResult> {
+    const { client, settings } = this.getClient(input)
     try {
       await client.send(new HeadBucketCommand({ Bucket: settings.bucket }))
       await this.listBackups(client, settings)
@@ -281,8 +282,11 @@ export class CloudBackupService {
     }
   }
 
-  private getClient(): { client: S3Client; settings: CloudBackupSettings } {
-    const credentials = this.appSettings.getCloudBackupCredentials()
+  private getClient(input?: CloudBackupSettingsInput): {
+    client: S3Client
+    settings: CloudBackupSettings
+  } {
+    const credentials = this.appSettings.getCloudBackupCredentials(input)
     const settings = credentials.settings
     if (!settings.enabled) {
       throw new AppError('CLOUD_NOT_CONFIGURED', '请先启用并保存 S3 兼容云端备份。')

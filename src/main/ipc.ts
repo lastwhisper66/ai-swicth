@@ -52,8 +52,11 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
     parseCloudBackupSettings,
     (input) => controller.setCloudBackupSettings(input)
   )
-  registerBusinessHandler(IPC_CHANNELS.testCloudBackup, rendererUrl, expectNoArguments, () =>
-    controller.testCloudBackup()
+  registerBusinessHandler(
+    IPC_CHANNELS.testCloudBackup,
+    rendererUrl,
+    parseCloudBackupSettings,
+    (input) => controller.testCloudBackup(input)
   )
   registerBusinessHandler(
     IPC_CHANNELS.setCloudBackupPassword,

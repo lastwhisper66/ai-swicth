@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, ArrowLeft, Eye, EyeOff, Info } from 'lucide-react'
+import { AlertCircle, ArrowLeft, ChevronDown, Eye, EyeOff, Info } from 'lucide-react'
 import type { AppSnapshot, ProviderSummary, ToolId } from '@shared/ipc'
 import { nativeModel, type HeaderInput, type ProviderConfigurations } from '@shared/configuration'
 import { ModelPresetEditor } from './ModelPresetEditor'
@@ -181,7 +181,7 @@ export function ProviderForm({
         返回 {toolName} 供应商
       </Button>
 
-      <Card className="gap-0 py-0">
+      <Card className="gap-0 overflow-visible py-0">
         <CardHeader className="border-b bg-muted/25 p-5 sm:p-6">
           <div className="flex items-start gap-3">
             <div className="flex size-11 shrink-0 items-center justify-center rounded-xl border bg-background">
@@ -315,40 +315,64 @@ export function ProviderForm({
                     setConfigurations((current) => ({ ...current, [toolId]: value }))
                   }
                 />
-                <ConnectionOptionsEditor
-                  toolId={toolId}
-                  configuration={configurations[toolId]!}
-                  savedHeaders={provider?.configurations[toolId]?.headers}
-                  onChange={(value) =>
-                    setConfigurations((current) => ({ ...current, [toolId]: value }))
-                  }
-                />
+                <details className="group rounded-lg border bg-muted/15">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 font-medium [&::-webkit-details-marker]:hidden">
+                    <span>
+                      高级连接选项
+                      <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+                        自定义请求头与默认模型路由
+                      </span>
+                    </span>
+                    <ChevronDown
+                      className="size-4 shrink-0 transition-transform group-open:rotate-180"
+                      aria-hidden="true"
+                    />
+                  </summary>
+                  <div className="border-t p-4 [&>section]:border-t-0 [&>section]:pt-0">
+                    <ConnectionOptionsEditor
+                      toolId={toolId}
+                      configuration={configurations[toolId]!}
+                      savedHeaders={provider?.configurations[toolId]?.headers}
+                      onChange={(value) =>
+                        setConfigurations((current) => ({ ...current, [toolId]: value }))
+                      }
+                    />
+                  </div>
+                </details>
               </FieldGroup>
             </FieldSet>
             {provider && (
-              <section className="min-w-0 space-y-4 border-t pt-5" aria-label="供应商完整配置">
-                <h3 className="font-semibold">完整配置</h3>
-                <ConfigPreview
-                  disabled={pending}
-                  input={{
-                    toolId,
-                    modelId,
-                    draft: {
-                      id: provider.id,
-                      name: form.name,
-                      baseUrl: form.baseUrl,
-                      apiKey: form.apiKey
-                        ? { mode: 'replace', value: form.apiKey }
-                        : { mode: 'keep' },
-                      tools: provider.tools,
-                      configurations
-                    }
-                  }}
-                />
-              </section>
+              <details className="group min-w-0 rounded-lg border bg-muted/15">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 font-medium [&::-webkit-details-marker]:hidden">
+                  完整配置预览
+                  <ChevronDown
+                    className="size-4 shrink-0 transition-transform group-open:rotate-180"
+                    aria-hidden="true"
+                  />
+                </summary>
+                <div className="border-t p-4">
+                  <ConfigPreview
+                    disabled={pending}
+                    input={{
+                      toolId,
+                      modelId,
+                      draft: {
+                        id: provider.id,
+                        name: form.name,
+                        baseUrl: form.baseUrl,
+                        apiKey: form.apiKey
+                          ? { mode: 'replace', value: form.apiKey }
+                          : { mode: 'keep' },
+                        tools: provider.tools,
+                        configurations
+                      }
+                    }}
+                  />
+                </div>
+              </details>
             )}
 
-            <div className="flex flex-wrap items-center justify-between gap-4 border-t pt-5">
+            <div className="sticky bottom-0 z-10 -mx-5 -mb-5 flex flex-wrap items-center justify-between gap-4 border-t bg-card/95 px-5 py-4 backdrop-blur sm:-mx-6 sm:-mb-6 sm:px-6">
               <p className="text-xs leading-5 text-muted-foreground">保存后需手动应用到工具。</p>
               <div className="flex gap-3">
                 <Button type="button" variant="outline" onClick={onCancel} disabled={pending}>

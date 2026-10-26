@@ -83,6 +83,33 @@ export class AppSettingsStore {
   }
 
   async setCloudBackup(input: CloudBackupSettingsInput): Promise<void> {
+    const previousCloudSecret = this.cloudSecretAccessKey
+    const { settings: next, secretAccessKey } = this.resolveCloudBackupCredentials(input)
+    this.cloudSecretAccessKey = secretAccessKey
+    try {
+      await this.saveDocument(this.settings.closeBehavior, next)
+    } catch (error) {
+      this.cloudSecretAccessKey = previousCloudSecret
+      throw error
+    }
+    this.settings = { closeBehavior: this.settings.closeBehavior, cloudBackup: next }
+  }
+
+  getCloudBackupCredentials(input?: CloudBackupSettingsInput): {
+    settings: CloudBackupSettings
+    secretAccessKey: string
+  } {
+    if (input) return this.resolveCloudBackupCredentials(input)
+    return {
+      settings: { ...this.settings.cloudBackup },
+      secretAccessKey: this.cloudSecretAccessKey
+    }
+  }
+
+  private resolveCloudBackupCredentials(input: CloudBackupSettingsInput): {
+    settings: CloudBackupSettings
+    secretAccessKey: string
+  } {
     if (!isRetentionCount(input.retentionCount)) {
       throw new AppError('INVALID_INPUT', '云端备份保留数量请选择 1、3、5、10 或 20 份。')
     }
@@ -104,47 +131,29 @@ export class AppSettingsStore {
       }
     }
     const current = this.settings.cloudBackup
-    const previousCloudSecret = this.cloudSecretAccessKey
-    const next: CloudBackupSettings = {
-      enabled: input.enabled,
-      endpoint: input.endpoint.trim(),
-      region: input.region.trim(),
-      bucket: input.bucket.trim(),
-      prefix: input.prefix.trim(),
-      retentionCount: input.retentionCount,
-      accessKeyId: input.accessKeyId.trim(),
-      hasSecret: current.hasSecret,
-      maskedSecret: current.maskedSecret,
-      encryptionPassword: current.encryptionPassword
-    }
+    let secretAccessKey = this.cloudSecretAccessKey
     if (input.secretAccessKey.mode === 'replace') {
       if (!input.secretAccessKey.value.trim() || input.secretAccessKey.value.length > 4096) {
         throw new AppError('INVALID_INPUT', 'Secret Access Key 不能为空且不能超过 4096 个字符。')
       }
-      this.cloudSecretAccessKey = input.secretAccessKey.value
-      next.hasSecret = true
-      next.maskedSecret = maskSecret(input.secretAccessKey.value)
+      secretAccessKey = input.secretAccessKey.value
     } else if (input.secretAccessKey.mode === 'clear') {
-      this.cloudSecretAccessKey = ''
-      next.hasSecret = false
-      next.maskedSecret = ''
+      secretAccessKey = ''
     }
-    try {
-      await this.saveDocument(this.settings.closeBehavior, next)
-    } catch (error) {
-      this.cloudSecretAccessKey = previousCloudSecret
-      throw error
-    }
-    this.settings = { closeBehavior: this.settings.closeBehavior, cloudBackup: next }
-  }
-
-  getCloudBackupCredentials(): {
-    settings: CloudBackupSettings
-    secretAccessKey: string
-  } {
     return {
-      settings: { ...this.settings.cloudBackup },
-      secretAccessKey: this.cloudSecretAccessKey
+      settings: {
+        enabled: input.enabled,
+        endpoint: input.endpoint.trim(),
+        region: input.region.trim(),
+        bucket: input.bucket.trim(),
+        prefix: input.prefix.trim(),
+        retentionCount: input.retentionCount,
+        accessKeyId: input.accessKeyId.trim(),
+        hasSecret: secretAccessKey.length > 0,
+        maskedSecret: secretAccessKey ? maskSecret(secretAccessKey) : '',
+        encryptionPassword: current.encryptionPassword
+      },
+      secretAccessKey
     }
   }
 

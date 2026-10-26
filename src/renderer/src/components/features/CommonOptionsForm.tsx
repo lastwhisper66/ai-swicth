@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef } from 'react'
 import type { ToolId } from '@shared/ipc'
 import {
   COMMON_FIELDS,
@@ -15,13 +15,8 @@ import { ConfigurationSelect } from './ConfigurationSelect'
 import { ConfigurationCheckbox } from './ConfigurationCheckbox'
 
 const formFields: Record<ToolId, ReadonlySet<string>> = {
-  'claude-code': new Set(['effortLevel', 'env.ENABLE_TOOL_SEARCH']),
-  codex: new Set([
-    'model_reasoning_effort',
-    'web_search',
-    'check_for_update_on_startup',
-    'history.max_bytes'
-  ])
+  'claude-code': new Set(['effortLevel']),
+  codex: new Set(['model_reasoning_effort'])
 }
 
 export function CommonOptionsForm({
@@ -53,15 +48,6 @@ export function CommonOptionsForm({
             const entry = readField(root, field.path)
             const key = field.path.join('.')
             const isEffort = ['effortLevel', 'model_reasoning_effort'].includes(key)
-            if (field.kind === 'bytes')
-              return (
-                <HistorySizeField
-                  key={key}
-                  value={entry.value}
-                  disabled={disabled}
-                  onChange={(value) => update(field.path, value)}
-                />
-              )
             if (field.kind === 'text' || field.kind === 'integer')
               return (
                 <Field key={key} className="gap-2">
@@ -134,173 +120,51 @@ export function CommonOptionsForm({
             )
           })}
         {toolId === 'claude-code' && (
-          <>
-            {(['WebSearch', 'WebFetch'] as const).map((tool) => (
-              <PermissionField
-                key={tool}
-                tool={tool}
-                root={root}
-                disabled={disabled}
-                onChange={onChange}
-              />
-            ))}
-            <ConfigurationCheckbox
-              id="hide-ai-attribution"
-              label="隐藏 AI 署名"
-              hint={
-                <>
-                  {status === 'custom'
-                    ? '当前为部分隐藏／自定义状态。'
-                    : status === 'hidden'
-                      ? '提交、PR 与会话链接三类署名均已隐藏。'
-                      : '使用工具默认署名。'}{' '}
-                  一个开关同时控制三类署名；关闭后恢复接管前设置，保留其他署名子字段。
-                </>
-              }
-              checked={status === 'hidden' ? true : status === 'custom' ? 'indeterminate' : false}
-              disabled={disabled}
-              onCheckedChange={(checked) => {
-                const next = structuredClone(root)
-                if (checked === true) {
-                  if (status !== 'hidden' && attributionOriginal === undefined)
-                    attributionBefore.current = structuredClone(readField(root, ['attribution']))
-                  next.attribution = {
-                    ...(isObject(root.attribution) ? root.attribution : {}),
-                    commit: '',
-                    pr: '',
-                    sessionUrl: false
-                  }
-                } else {
-                  const before = attributionOriginal ??
-                    attributionBefore.current ?? { exists: false }
-                  if (before.exists && !isObject(before.value)) next.attribution = before.value
-                  else {
-                    const value = isObject(root.attribution) ? { ...root.attribution } : {}
-                    for (const key of ['commit', 'pr', 'sessionUrl']) {
-                      if (
-                        before.exists &&
-                        isObject(before.value) &&
-                        Object.hasOwn(before.value, key)
-                      )
-                        value[key] = before.value[key]
-                      else delete value[key]
-                    }
-                    if (Object.keys(value).length) next.attribution = value
-                    else delete next.attribution
-                  }
+          <ConfigurationCheckbox
+            id="hide-ai-attribution"
+            label="隐藏 AI 署名"
+            hint={
+              <>
+                {status === 'custom'
+                  ? '当前为部分隐藏／自定义状态。'
+                  : status === 'hidden'
+                    ? '提交、PR 与会话链接三类署名均已隐藏。'
+                    : '使用工具默认署名。'}{' '}
+                一个开关同时控制三类署名；关闭后恢复接管前设置，保留其他署名子字段。
+              </>
+            }
+            checked={status === 'hidden' ? true : status === 'custom' ? 'indeterminate' : false}
+            disabled={disabled}
+            onCheckedChange={(checked) => {
+              const next = structuredClone(root)
+              if (checked === true) {
+                if (status !== 'hidden' && attributionOriginal === undefined)
+                  attributionBefore.current = structuredClone(readField(root, ['attribution']))
+                next.attribution = {
+                  ...(isObject(root.attribution) ? root.attribution : {}),
+                  commit: '',
+                  pr: '',
+                  sessionUrl: false
                 }
-                onChange(next)
-              }}
-            />
-          </>
+              } else {
+                const before = attributionOriginal ?? attributionBefore.current ?? { exists: false }
+                if (before.exists && !isObject(before.value)) next.attribution = before.value
+                else {
+                  const value = isObject(root.attribution) ? { ...root.attribution } : {}
+                  for (const key of ['commit', 'pr', 'sessionUrl']) {
+                    if (before.exists && isObject(before.value) && Object.hasOwn(before.value, key))
+                      value[key] = before.value[key]
+                    else delete value[key]
+                  }
+                  if (Object.keys(value).length) next.attribution = value
+                  else delete next.attribution
+                }
+              }
+              onChange(next)
+            }}
+          />
         )}
       </div>
     </div>
-  )
-}
-
-function PermissionField({
-  tool,
-  root,
-  disabled,
-  onChange
-}: {
-  tool: 'WebSearch' | 'WebFetch'
-  root: ConfigObject
-  disabled: boolean
-  onChange: (root: ConfigObject) => void
-}): React.JSX.Element {
-  const permissions = isObject(root.permissions) ? root.permissions : {}
-  const modes = (['allow', 'ask', 'deny'] as const).filter(
-    (mode) => Array.isArray(permissions[mode]) && permissions[mode].includes(tool)
-  )
-  const value = modes.length > 1 ? 'custom' : (modes[0] ?? 'default')
-  const conflicts = Object.values(permissions).some(
-    (rules) =>
-      Array.isArray(rules) &&
-      rules.some(
-        (rule) => typeof rule === 'string' && (rule === '*' || rule.startsWith(`${tool}(`))
-      )
-  )
-  return (
-    <ConfigurationSelect
-      label={tool === 'WebSearch' ? '网络搜索' : '网络拉取'}
-      value={value}
-      choices={[
-        ['default', '工具默认'],
-        ['allow', '允许'],
-        ['ask', '每次询问'],
-        ['deny', '禁止']
-      ]}
-      disabled={disabled}
-      hint={
-        conflicts || modes.length > 1
-          ? '已有通配符、限定范围或冲突规则；高优先级规则可能覆盖本选择。请在高级原文中核对，其他规则会保留。'
-          : '只增删此工具的精确规则，保留其他权限；托管配置、项目配置及外部规则也可能影响实际行为。'
-      }
-      onChange={(mode) => {
-        const next = structuredClone(root)
-        for (const target of ['allow', 'ask', 'deny']) {
-          const rules = readField(next, ['permissions', target]).value
-          const filtered = Array.isArray(rules) ? rules.filter((rule) => rule !== tool) : []
-          if (target === mode) filtered.push(tool)
-          setField(next, ['permissions', target], filtered.length ? filtered : undefined)
-        }
-        onChange(next)
-      }}
-    />
-  )
-}
-
-function HistorySizeField({
-  value,
-  onChange,
-  disabled
-}: {
-  value: unknown
-  onChange: (value: number | undefined) => void
-  disabled: boolean
-}): React.JSX.Element {
-  const bytes = typeof value === 'number' ? value : undefined
-  const [unit, setUnit] = useState(
-    bytes && bytes % 1048576 === 0 ? '1048576' : bytes && bytes % 1024 === 0 ? '1024' : '1'
-  )
-  return (
-    <Field className="min-w-0 gap-2">
-      <FieldLabel htmlFor="history-max-bytes">历史文件大小</FieldLabel>
-      <div className="grid grid-cols-[minmax(0,1fr)_7rem] items-center gap-2">
-        <Input
-          id="history-max-bytes"
-          type="number"
-          min="0"
-          step="any"
-          disabled={disabled}
-          value={bytes === undefined ? '' : bytes / Number(unit)}
-          onChange={(event) =>
-            onChange(
-              event.target.value === '' ? undefined : Number(event.target.value) * Number(unit)
-            )
-          }
-          placeholder="不设置上限"
-          aria-describedby="history-max-bytes-description"
-        />
-        <ConfigurationSelect
-          label="历史文件大小单位"
-          hideLabel
-          value={unit}
-          choices={[
-            ['1', 'bytes'],
-            ['1024', 'KiB'],
-            ['1048576', 'MiB'],
-            ['1073741824', 'GiB']
-          ]}
-          onChange={setUnit}
-          disabled={disabled}
-        />
-      </div>
-      <FieldDescription id="history-max-bytes-description" className="text-xs leading-5">
-        留空恢复默认；转换后必须为正整数字节。超过上限时工具会丢弃最早记录。
-      </FieldDescription>
-    </Field>
   )
 }

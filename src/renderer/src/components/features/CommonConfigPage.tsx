@@ -32,7 +32,7 @@ import { Button } from '@renderer/components/ui/button'
 import { Card, CardContent } from '@renderer/components/ui/card'
 import { Field, FieldDescription, FieldLabel } from '@renderer/components/ui/field'
 import { Spinner } from '@renderer/components/ui/spinner'
-import { Tabs, TabsList, TabsTrigger } from '@renderer/components/ui/tabs'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@renderer/components/ui/tabs'
 import { Textarea } from '@renderer/components/ui/textarea'
 
 export function CommonConfigPage({
@@ -69,18 +69,18 @@ export function CommonConfigPage({
             </TabsTrigger>
           ))}
         </TabsList>
+        {TOOL_IDS.map((id) => (
+          <TabsContent key={id} value={id} forceMount className="mt-3 data-[state=inactive]:hidden">
+            <CommonConfigEditor
+              toolId={id}
+              providers={providers}
+              busy={busy}
+              onPendingChange={onPendingChange}
+              onSaved={onSaved}
+            />
+          </TabsContent>
+        ))}
       </Tabs>
-      {TOOL_IDS.map((id) => (
-        <div key={id} hidden={id !== toolId}>
-          <CommonConfigEditor
-            toolId={id}
-            providers={providers}
-            busy={busy}
-            onPendingChange={onPendingChange}
-            onSaved={onSaved}
-          />
-        </div>
-      ))}
     </div>
   )
 }
@@ -107,7 +107,9 @@ function CommonConfigEditor({
   const [migrationProviderId, setMigrationProviderId] = useState('')
   const [migrationModelId, setMigrationModelId] = useState('')
   const toolName = toolId === 'codex' ? 'Codex' : 'Claude Code'
-  const dirty = configuration !== null && content !== configuration.content
+  const dirty =
+    configuration !== null &&
+    (configuration.source === 'current' || content !== configuration.content)
   let root: ConfigObject | null = null
   try {
     root = parseConfiguration(toolId, content)
@@ -318,7 +320,7 @@ function CommonConfigEditor({
                                 迁移到 {migrationProvider.name} / {migrationModel.name}？
                               </AlertDialogTitle>
                               <AlertDialogDescription>
-                                将读取已保存模板，把可映射字段迁移到所选连接和模型，替换其对应选项和请求头，然后从模板移除这些字段。未保存草稿不会参与迁移；其他模型的
+                                将读取已保存模板，把可映射字段迁移到所选连接和模型，替换其对应选项和请求头，然后从模板移除这些字段。未保存草稿不会参与迁移，并会在迁移完成后丢弃；其他模型的
                                 目标工具文件不变。Claude 的思考强度统一由共通配置管理。
                               </AlertDialogDescription>
                             </AlertDialogHeader>
@@ -346,54 +348,54 @@ function CommonConfigEditor({
                     高级原文
                   </TabsTrigger>
                 </TabsList>
+                <TabsContent value="form" className="mt-3">
+                  {root ? (
+                    <CommonOptionsForm
+                      key={configuration.revision}
+                      toolId={toolId}
+                      root={root}
+                      onChange={(value) => setContent(serializeConfiguration(toolId, value))}
+                      disabled={busy || configuration.conflicts.length > 0}
+                      attributionOriginal={configuration.attributionOriginal}
+                    />
+                  ) : (
+                    <Alert variant="destructive">
+                      <AlertDescription>
+                        草稿格式无效，请切换“高级原文”修复后继续。未保存任何内容。
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                </TabsContent>
+                <TabsContent value="raw" className="mt-3">
+                  <Field className="min-w-0 gap-3">
+                    <FieldLabel htmlFor={`${toolId}-common-content`}>
+                      {toolName} 共通配置
+                    </FieldLabel>
+                    <Textarea
+                      id={`${toolId}-common-content`}
+                      value={content}
+                      onChange={(event) => setContent(event.target.value)}
+                      disabled={busy}
+                      spellCheck={false}
+                      autoCapitalize="none"
+                      wrap="off"
+                      aria-describedby={`${toolId}-common-description`}
+                      className="h-96 resize-y field-sizing-fixed font-mono text-xs leading-6"
+                    />
+                    <FieldDescription
+                      id={`${toolId}-common-description`}
+                      className="text-xs leading-6"
+                    >
+                      {toolId === 'claude-code'
+                        ? '共通字段与表单共享同一草稿；保留未知字段，供应商连接、路由与模型选项请在供应商侧设置。'
+                        : '可管理审批、沙箱、历史和 MCP 等字段；不能包含 model、model_provider、model_providers，供应商地址和 API Key 统一由 config.toml 中的供应商配置管理。'}
+                      <span className="block">
+                        删除模板已有字段会同步清除对应覆盖，保留模板之外的无关配置。保存会立即应用，供应商和模型选项保持不变。
+                      </span>
+                    </FieldDescription>
+                  </Field>
+                </TabsContent>
               </Tabs>
-              {editorMode === 'form' ? (
-                root ? (
-                  <CommonOptionsForm
-                    key={configuration.revision}
-                    toolId={toolId}
-                    root={root}
-                    onChange={(value) => setContent(serializeConfiguration(toolId, value))}
-                    disabled={busy || configuration.conflicts.length > 0}
-                    attributionOriginal={configuration.attributionOriginal}
-                  />
-                ) : (
-                  <Alert variant="destructive">
-                    <AlertDescription>
-                      草稿格式无效，请切换“高级原文”修复后继续。未保存任何内容。
-                    </AlertDescription>
-                  </Alert>
-                )
-              ) : (
-                <Field className="min-w-0 gap-3">
-                  <FieldLabel htmlFor={`${toolId}-common-content`}>{toolName} 共通配置</FieldLabel>
-                  <Textarea
-                    id={`${toolId}-common-content`}
-                    value={content}
-                    onChange={(event) => setContent(event.target.value)}
-                    disabled={busy}
-                    spellCheck={false}
-                    autoCapitalize="none"
-                    wrap="off"
-                    aria-describedby={`${toolId}-common-description`}
-                    className="h-96 resize-y [field-sizing:fixed] font-mono text-xs leading-6"
-                  />
-                  <FieldDescription
-                    id={`${toolId}-common-description`}
-                    className="text-xs leading-6"
-                  >
-                    {toolId === 'claude-code'
-                      ? '共通字段与表单共享同一草稿；保留未知字段，供应商连接、路由与模型选项请在供应商侧设置。'
-                      : '可管理审批、沙箱、历史和 MCP 等字段；不能包含 model、model_provider、model_providers，供应商地址和 API Key 统一由 config.toml 中的供应商配置管理。'}
-                    <span className="block">
-                      删除模板已有字段会同步清除对应覆盖，保留模板之外的无关配置。保存会立即应用，供应商和模型选项保持不变。
-                    </span>
-                    <span className="mt-2 block break-all">
-                      本地模板：{configuration.templatePath}
-                    </span>
-                  </FieldDescription>
-                </Field>
-              )}
               <p className="text-xs leading-6 break-all text-muted-foreground">
                 本地模板：{configuration.templatePath}
               </p>
@@ -406,7 +408,12 @@ function CommonConfigEditor({
               <Button
                 type="button"
                 disabled={
-                  busy || loading || !configuration || !root || configuration.conflicts.length > 0
+                  busy ||
+                  loading ||
+                  !configuration ||
+                  !dirty ||
+                  !root ||
+                  configuration.conflicts.length > 0
                 }
               >
                 <Save aria-hidden="true" />

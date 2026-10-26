@@ -33,7 +33,7 @@ export function ToolInstallationStatus({
   showPath?: boolean
 }): React.JSX.Element {
   return (
-    <div className="min-w-0 space-y-1 text-xs leading-5 text-muted-foreground" role="status">
+    <div className="min-w-0 space-y-1 text-xs leading-5 text-muted-foreground">
       <p>{installation.message}</p>
       {showPath && installation.executablePath && (
         <p className="break-all">

@@ -121,18 +121,18 @@ function App(): React.JSX.Element {
     )
   }
 
-  async function saveCloudBackupSettings(input: CloudBackupSettingsInput): Promise<void> {
-    await runSnapshotOperation(
+  async function saveCloudBackupSettings(input: CloudBackupSettingsInput): Promise<boolean> {
+    return runSnapshotOperation(
       'cloud:settings',
       () => window.api.setCloudBackupSettings(input),
       '云端备份设置已保存。'
     )
   }
 
-  async function testCloudBackup(): Promise<void> {
+  async function testCloudBackup(input: CloudBackupSettingsInput): Promise<void> {
     setPendingKey('cloud:test')
     try {
-      const result = await window.api.testCloudBackup()
+      const result = await window.api.testCloudBackup(input)
       if (!result.ok) return showError(result.error.message)
       showSuccess(result.value.message)
     } catch {
@@ -142,13 +142,18 @@ function App(): React.JSX.Element {
     }
   }
 
-  async function saveCloudBackupPassword(encryptionPassword: string): Promise<void> {
+  async function saveCloudBackupPassword(encryptionPassword: string): Promise<boolean> {
     try {
       const result = await window.api.setCloudBackupPassword({ encryptionPassword })
-      if (!result.ok) return showError(result.error.message)
+      if (!result.ok) {
+        showError(result.error.message)
+        return false
+      }
       adoptSnapshot(result.value)
+      return true
     } catch {
       showError('备份密码未能保存到本机，请重新打开应用后重试。')
+      return false
     }
   }
 
@@ -202,14 +207,6 @@ function App(): React.JSX.Element {
     } finally {
       setPendingKey(null)
     }
-  }
-
-  async function savePath(toolId: ToolId, path: string): Promise<void> {
-    await runSnapshotOperation(
-      `path:${toolId}:save`,
-      () => window.api.setToolPath({ toolId, path }),
-      '配置路径已更新。'
-    )
   }
 
   async function pickPath(toolId: ToolId): Promise<void> {
@@ -269,15 +266,20 @@ function App(): React.JSX.Element {
     key: string,
     operation: () => Promise<ApiResult<AppSnapshot>>,
     successMessage: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     setPendingKey(key)
     try {
       const result = await operation()
-      if (!result.ok) return showError(result.error.message)
+      if (!result.ok) {
+        showError(result.error.message)
+        return false
+      }
       adoptSnapshot(result.value)
       showSuccess(successMessage)
+      return true
     } catch {
       showError('无法连接本地应用，请重新打开应用后重试。')
+      return false
     } finally {
       setPendingKey(null)
     }
@@ -332,9 +334,9 @@ function App(): React.JSX.Element {
 
   return (
     <TooltipProvider>
-      <div className="min-h-svh">
-        <header className="border-b bg-background/95 backdrop-blur">
-          <div className="flex w-full flex-wrap items-center gap-3 px-5 py-4 sm:px-8">
+      <div className="flex h-svh min-w-0 flex-col overflow-hidden">
+        <header className="shrink-0 border-b bg-background/95 backdrop-blur">
+          <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center gap-3 px-5 py-4 sm:px-8">
             <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <ArrowLeftRight className="size-4" aria-hidden="true" />
             </div>
@@ -343,15 +345,16 @@ function App(): React.JSX.Element {
               <p className="text-xs text-muted-foreground">本地供应商配置</p>
             </div>
             <nav
-              className="order-3 flex w-full gap-1 border-t pt-3 lg:order-none lg:ml-6 lg:w-auto lg:border-t-0 lg:pt-0"
+              className="order-3 flex w-full gap-1 border-t pt-3 lg:order-0 lg:ml-6 lg:w-auto lg:border-t-0 lg:pt-0"
               aria-label="工具页面"
             >
               <Button
                 type="button"
                 variant={view === 'claude-code' ? 'secondary' : 'ghost'}
-                size="sm"
+                className="h-10 px-4"
                 disabled={pendingKey !== null}
                 onClick={() => setView('claude-code')}
+                aria-current={view === 'claude-code' ? 'page' : undefined}
               >
                 <ToolIcon toolId="claude-code" />
                 Claude Code
@@ -359,12 +362,24 @@ function App(): React.JSX.Element {
               <Button
                 type="button"
                 variant={view === 'codex' ? 'secondary' : 'ghost'}
-                size="sm"
+                className="h-10 px-4"
                 disabled={pendingKey !== null}
                 onClick={() => setView('codex')}
+                aria-current={view === 'codex' ? 'page' : undefined}
               >
                 <ToolIcon toolId="codex" />
                 Codex
+              </Button>
+              <Button
+                type="button"
+                variant={view === 'settings' ? 'secondary' : 'ghost'}
+                className="h-10 px-4"
+                disabled={pendingKey !== null}
+                onClick={() => setView('settings')}
+                aria-current={view === 'settings' ? 'page' : undefined}
+              >
+                <Settings aria-hidden="true" />
+                设置
               </Button>
             </nav>
             <div className="ml-auto flex items-center gap-2">
@@ -372,7 +387,8 @@ function App(): React.JSX.Element {
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-sm"
+                size="icon-lg"
+                className="size-10"
                 disabled={pendingKey !== null}
                 onClick={() => void refreshSnapshot()}
                 aria-label="刷新工具状态"
@@ -383,17 +399,6 @@ function App(): React.JSX.Element {
                   aria-hidden="true"
                 />
               </Button>
-              <Button
-                type="button"
-                variant={view === 'settings' ? 'secondary' : 'ghost'}
-                size="icon-sm"
-                disabled={pendingKey !== null}
-                onClick={() => setView('settings')}
-                aria-label="打开设置"
-                title="设置"
-              >
-                <Settings aria-hidden="true" />
-              </Button>
               <Badge variant="outline" className="gap-1.5">
                 <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden="true" />v
                 {snapshot.appInfo.version}
@@ -402,81 +407,82 @@ function App(): React.JSX.Element {
           </div>
         </header>
 
-        <main className="w-full px-5 py-6 sm:px-8 sm:py-8">
-          {view === 'settings' ? (
-            <SettingsPage
-              section={settingsSection}
-              settings={snapshot.settings}
-              onCloseBehaviorChange={(behavior) => void setCloseBehavior(behavior)}
-              onSectionChange={setSettingsSection}
-              providers={snapshot.providers}
-              tools={snapshot.tools}
-              backups={snapshot.backups}
-              cloudBackup={snapshot.settings.cloudBackup}
-              pendingKey={pendingKey}
-              busy={pendingKey !== null}
-              providerTool={settingsTool}
-              onProviderToolChange={setSettingsTool}
-              providerEditor={
-                providerEditor && (
-                  <ProviderForm
-                    key={`${providerEditor.toolId}:${providerEditor.provider?.id ?? 'new'}`}
-                    provider={providerEditor.provider}
-                    toolId={providerEditor.toolId}
-                    currentModelId={
-                      providerEditor.provider?.id ===
-                      snapshot.tools[providerEditor.toolId].currentProviderId
-                        ? snapshot.tools[providerEditor.toolId].currentModelId
-                        : null
-                    }
-                    onCancel={() => setProviderEditor(null)}
-                    onPendingChange={(pending) => setPendingKey(pending ? 'provider:save' : null)}
-                    onSaved={(nextSnapshot, message) => {
-                      adoptSnapshot(nextSnapshot)
-                      setProviderEditor(null)
-                      showSuccess(message)
-                    }}
-                  />
-                )
-              }
-              onAddProvider={openProviderEditor}
-              onEditProvider={(provider, toolId) => openProviderEditor(toolId, provider)}
-              onDeleteProvider={(providerId) => void deleteProvider(providerId)}
-              onSavePath={(toolId, path) => void savePath(toolId, path)}
-              onPickPath={(toolId) => void pickPath(toolId)}
-              onResetPath={(toolId) => void resetPath(toolId)}
-              onOpenLocation={(input) => void openToolLocation(input)}
-              onRestore={(backupId) => void restoreBackup(backupId)}
-              onSaveCloudBackup={(input) => void saveCloudBackupSettings(input)}
-              onSaveCloudBackupPassword={(password) => void saveCloudBackupPassword(password)}
-              onTestCloudBackup={() => void testCloudBackup()}
-              onUploadCloudBackup={(password) => void uploadCloudBackup(password)}
-              onRestoreCloudBackup={(password) => void restoreCloudBackup(password)}
-              onPendingChange={(pending) => setPendingKey(pending ? 'common:save' : null)}
-              onCommonSaved={(nextSnapshot, message) => {
-                adoptSnapshot(nextSnapshot)
-                showSuccess(message)
-              }}
-            />
-          ) : (
-            <ToolConfigPage
-              toolId={view}
-              status={snapshot.tools[view]}
-              providers={snapshot.providers}
-              busy={pendingKey !== null}
-              pendingProviderId={
-                pendingKey?.startsWith(`apply:${view}:`)
-                  ? pendingKey.slice(`apply:${view}:`.length)
-                  : null
-              }
-              onApply={(toolId, providerId, modelId) =>
-                void applyProvider(toolId, providerId, modelId)
-              }
-              onAdd={openProviderEditor}
-              onEdit={(provider) => openProviderEditor(view, provider)}
-              onDelete={(providerId) => void deleteProvider(providerId)}
-            />
-          )}
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both">
+          <div className="mx-auto w-full max-w-7xl px-5 py-6 sm:px-8 sm:py-8">
+            {view === 'settings' ? (
+              <SettingsPage
+                section={settingsSection}
+                settings={snapshot.settings}
+                onCloseBehaviorChange={(behavior) => void setCloseBehavior(behavior)}
+                onSectionChange={setSettingsSection}
+                providers={snapshot.providers}
+                tools={snapshot.tools}
+                backups={snapshot.backups}
+                cloudBackup={snapshot.settings.cloudBackup}
+                pendingKey={pendingKey}
+                busy={pendingKey !== null}
+                providerTool={settingsTool}
+                onProviderToolChange={setSettingsTool}
+                providerEditor={
+                  providerEditor && (
+                    <ProviderForm
+                      key={`${providerEditor.toolId}:${providerEditor.provider?.id ?? 'new'}`}
+                      provider={providerEditor.provider}
+                      toolId={providerEditor.toolId}
+                      currentModelId={
+                        providerEditor.provider?.id ===
+                        snapshot.tools[providerEditor.toolId].currentProviderId
+                          ? snapshot.tools[providerEditor.toolId].currentModelId
+                          : null
+                      }
+                      onCancel={() => setProviderEditor(null)}
+                      onPendingChange={(pending) => setPendingKey(pending ? 'provider:save' : null)}
+                      onSaved={(nextSnapshot, message) => {
+                        adoptSnapshot(nextSnapshot)
+                        setProviderEditor(null)
+                        showSuccess(message)
+                      }}
+                    />
+                  )
+                }
+                onAddProvider={openProviderEditor}
+                onEditProvider={(provider, toolId) => openProviderEditor(toolId, provider)}
+                onDeleteProvider={(providerId) => void deleteProvider(providerId)}
+                onPickPath={(toolId) => void pickPath(toolId)}
+                onResetPath={(toolId) => void resetPath(toolId)}
+                onOpenLocation={(input) => void openToolLocation(input)}
+                onRestore={(backupId) => void restoreBackup(backupId)}
+                onSaveCloudBackup={saveCloudBackupSettings}
+                onSaveCloudBackupPassword={saveCloudBackupPassword}
+                onTestCloudBackup={(input) => void testCloudBackup(input)}
+                onUploadCloudBackup={(password) => void uploadCloudBackup(password)}
+                onRestoreCloudBackup={(password) => void restoreCloudBackup(password)}
+                onPendingChange={(pending) => setPendingKey(pending ? 'common:save' : null)}
+                onCommonSaved={(nextSnapshot, message) => {
+                  adoptSnapshot(nextSnapshot)
+                  showSuccess(message)
+                }}
+              />
+            ) : (
+              <ToolConfigPage
+                toolId={view}
+                status={snapshot.tools[view]}
+                providers={snapshot.providers}
+                busy={pendingKey !== null}
+                pendingProviderId={
+                  pendingKey?.startsWith(`apply:${view}:`)
+                    ? pendingKey.slice(`apply:${view}:`.length)
+                    : null
+                }
+                onApply={(toolId, providerId, modelId) =>
+                  void applyProvider(toolId, providerId, modelId)
+                }
+                onAdd={openProviderEditor}
+                onEdit={(provider) => openProviderEditor(view, provider)}
+                onDelete={(providerId) => void deleteProvider(providerId)}
+              />
+            )}
+          </div>
         </main>
       </div>
     </TooltipProvider>

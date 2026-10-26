@@ -60,7 +60,7 @@ export function ProviderRow({
         isCurrent && 'border-emerald-600/30 bg-emerald-50/30 dark:bg-emerald-950/15'
       )}
     >
-      <ItemContent className="min-w-0 basis-72 gap-3">
+      <ItemContent className="min-w-0 max-w-3xl basis-72 gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h3 className="min-w-0 truncate text-base font-semibold" title={provider.name}>
             {provider.name}
@@ -97,7 +97,7 @@ export function ProviderRow({
           )}
         </dl>
       </ItemContent>
-      <ItemActions className="ml-auto flex-wrap items-end justify-end gap-4">
+      <ItemActions className="flex-wrap items-end justify-end gap-4">
         {onApply && (
           <div className="w-52 min-w-0 max-w-full">
             <ConfigurationSelect
@@ -129,34 +129,15 @@ export function ProviderRow({
         )}
         <div className="flex shrink-0 items-center gap-1">
           {onApply && (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button type="button" variant={isCurrent ? 'outline' : 'default'} disabled={busy}>
-                  {pending ? <Spinner aria-hidden="true" /> : <Play aria-hidden="true" />}
-                  {pending ? '应用中…' : '应用'}
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogMedia>
-                    <Play aria-hidden="true" />
-                  </AlertDialogMedia>
-                  <AlertDialogTitle className="wrap-anywhere">
-                    应用 {provider.name} / {selected.name}？
-                  </AlertDialogTitle>
-                  <AlertDialogDescription>
-                    将把配置写入 {toolId === 'claude-code' ? 'Claude Code' : 'Codex'}
-                    。写入前会创建备份，API Key 会按工具要求保存在本地配置文件中。
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>取消</AlertDialogCancel>
-                  <AlertDialogAction onClick={() => onApply(selected.id)}>
-                    确认应用
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+            <Button
+              type="button"
+              variant={isCurrent ? 'outline' : 'default'}
+              disabled={busy}
+              onClick={() => onApply(selected.id)}
+            >
+              {pending ? <Spinner aria-hidden="true" /> : <Play aria-hidden="true" />}
+              {pending ? '应用中…' : '应用'}
+            </Button>
           )}
           <Button
             type="button"

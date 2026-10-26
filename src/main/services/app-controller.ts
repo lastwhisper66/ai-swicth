@@ -77,8 +77,8 @@ export class AppController {
     })
   }
 
-  async testCloudBackup(): Promise<CloudBackupConnectionResult> {
-    return this.withMutation(() => this.cloudBackup.testConnection())
+  async testCloudBackup(input: CloudBackupSettingsInput): Promise<CloudBackupConnectionResult> {
+    return this.withMutation(() => this.cloudBackup.testConnection(input))
   }
 
   async setCloudBackupPassword(input: CloudBackupOperationInput): Promise<AppSnapshot> {
