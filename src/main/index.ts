@@ -176,8 +176,7 @@ app.whenReady().then(async () => {
     backupService,
     adapters,
     commonConfigs,
-    managedStates,
-    installations
+    managedStates
   )
   const controller = new AppController(
     providerStore,

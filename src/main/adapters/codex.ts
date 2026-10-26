@@ -13,7 +13,7 @@ import {
 import { AppError } from '../errors'
 import { applyOwnedFields, verifyFields, type DesiredField } from '../services/managed-state'
 import { canonical } from './claude-code'
-import { requireVersion, validateCommonFields } from './configuration-policy'
+import { validateCommonFields } from './configuration-policy'
 import { readCodexToml, updateCodexToml, validateCodexToml } from './toml-document'
 import type {
   AppliedProviderConfiguration,
@@ -102,15 +102,11 @@ export class CodexAdapter implements ToolAdapter {
     else delete connection.http_headers
     if (provider.configuration.supportsWebsockets === undefined)
       delete connection.supports_websockets
-    else {
-      requireVersion('codex', provider.version, '0.154.0', 'WebSocket 兼容能力（兼容核对基线）')
-      connection.supports_websockets = provider.configuration.supportsWebsockets
-    }
+    else connection.supports_websockets = provider.configuration.supportsWebsockets
     return {
       content: stringify(root),
       managedFields,
       warnings: [
-        ...(!provider.version ? ['工具版本未知；仅写入基础连接，模型能力未核实。'] : []),
         ...(provider.preset.options.context1m || provider.preset.options.fast
           ? ['1M / Fast 的实际可用性由模型、账号和网关决定，未发起 API 探测。']
           : []),
@@ -146,10 +142,8 @@ export class CodexAdapter implements ToolAdapter {
 }
 function desiredOptions(provider: AppliedProviderConfiguration): DesiredField[] {
   const options = provider.preset.options
-  if (Object.keys(options).length)
-    requireVersion('codex', provider.version, '0.154.0', '本版 Codex 模型选项（兼容核对基线）')
   const fields: DesiredField[] = []
-  for (const effort of [options.effort, options.planEffort])
+  for (const effort of [options.planEffort])
     if (effort !== undefined && !codexEfforts(provider.preset.model).includes(effort))
       throw new AppError(
         'INCOMPATIBLE_PROVIDER',
@@ -159,7 +153,6 @@ function desiredOptions(provider: AppliedProviderConfiguration): DesiredField[] 
     if (value !== undefined) fields.push({ path, value })
   }
   add(['model_context_window'], options.context1m ? 1000000 : undefined)
-  add(['model_reasoning_effort'], options.effort)
   add(['plan_mode_reasoning_effort'], options.planEffort)
   add(['model_reasoning_summary'], options.reasoningSummary)
   add(['model_verbosity'], options.verbosity)

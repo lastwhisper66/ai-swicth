@@ -34,9 +34,6 @@ export function migrateConfiguration(
       move(['model_context_window'], () => {
         options.context1m = true
       })
-    move(['model_reasoning_effort'], (value) => {
-      options.effort = value as string
-    })
     move(['plan_mode_reasoning_effort'], (value) => {
       options.planEffort = value as string
     })

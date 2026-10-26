@@ -1,8 +1,6 @@
 import { isDeepStrictEqual } from 'node:util'
 import {
   ROUTE_ENV,
-  CLAUDE_EFFORTS,
-  claudeCanonicalModel,
   mergeTemplate,
   isObject,
   providerOptionPaths,
@@ -27,12 +25,6 @@ export class ClaudeCodeAdapter implements ToolAdapter {
 
   extractCommon(content: string | null): string {
     const root = parseJson(content)
-    const model = this.parseCurrent(content).model
-    const savedEffort = model
-      ? readField(root, ['modelSettings', claudeCanonicalModel(model), 'effortLevel']).value
-      : undefined
-    if (root.effortLevel === undefined && CLAUDE_EFFORTS.includes(savedEffort as never))
-      root.effortLevel = savedEffort
     for (const path of providerOptionPaths(this.toolId, root)) setField(root, path, undefined)
     delete root.model
     if (isObject(root.env)) {
@@ -56,6 +48,16 @@ export class ClaudeCodeAdapter implements ToolAdapter {
         'INVALID_INPUT',
         '共通配置包含供应商连接、路由或模型选项。请先使用“迁移归属字段”将它们迁移至指定供应商和模型。'
       )
+    if (
+      isObject(root.modelSettings) &&
+      Object.values(root.modelSettings).some(
+        (settings) => isObject(settings) && 'effortLevel' in settings
+      )
+    )
+      throw new AppError(
+        'INVALID_INPUT',
+        '思考强度必须使用顶层 effortLevel，不能在 modelSettings 中按模型配置。'
+      )
     validateCommonFields(this.toolId, root)
   }
 
@@ -70,7 +72,6 @@ export class ClaudeCodeAdapter implements ToolAdapter {
     if (isObject(current.env))
       for (const [key, value] of Object.entries(current.env))
         if (isProviderEnvironmentKey(key)) setField(root, ['env', key], value)
-    syncCommonEffort(root, this.parseCurrent(content).model)
     return serialize(root, content)
   }
 
@@ -128,12 +129,10 @@ export class ClaudeCodeAdapter implements ToolAdapter {
     else delete env.ANTHROPIC_CUSTOM_HEADERS
     root.env = env
     root.model = provider.model
-    syncCommonEffort(root, provider.model)
     return {
       content: serialize(root, content),
       managedFields,
       warnings: [
-        ...(!provider.version ? ['工具版本未知，模型选项的实际支持情况尚未核实。'] : []),
         ...(provider.preset.options.context1m
           ? ['已为模型添加 [1m] 后缀，实际上下文支持由模型和网关决定，未发起 API 探测。']
           : []),
@@ -169,22 +168,6 @@ function desiredOptions(provider: AppliedProviderConfiguration): DesiredField[] 
   for (const [key, model] of Object.entries(provider.configuration.routes ?? {}))
     desired.push({ path: ['env', ROUTE_ENV[key as keyof typeof ROUTE_ENV]], value: model })
   return desired
-}
-
-function syncCommonEffort(root: ConfigObject, model: string | null): void {
-  if (!model || !CLAUDE_EFFORTS.includes(root.effortLevel as never)) return
-  const canonicalModel = claudeCanonicalModel(model)
-  if (
-    (root.modelSettings !== undefined && !isObject(root.modelSettings)) ||
-    (isObject(root.modelSettings) &&
-      root.modelSettings[canonicalModel] !== undefined &&
-      !isObject(root.modelSettings[canonicalModel]))
-  )
-    throw new AppError(
-      'MALFORMED_CONFIG',
-      'Claude Code 的 modelSettings 及当前模型条目必须是对象，请修复后再保存思考强度。'
-    )
-  setField(root, ['modelSettings', canonicalModel, 'effortLevel'], root.effortLevel)
 }
 
 export function parseClaudeConfiguration(content: string | null): ConfigObject {

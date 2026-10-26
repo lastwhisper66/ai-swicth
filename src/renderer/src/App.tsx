@@ -429,7 +429,6 @@ function App(): React.JSX.Element {
                         ? snapshot.tools[providerEditor.toolId].currentModelId
                         : null
                     }
-                    installation={snapshot.tools[providerEditor.toolId].installation}
                     onCancel={() => setProviderEditor(null)}
                     onPendingChange={(pending) => setPendingKey(pending ? 'provider:save' : null)}
                     onSaved={(nextSnapshot, message) => {

@@ -1,9 +1,8 @@
 import { Plus, Trash2 } from 'lucide-react'
-import type { ToolId, ToolInstallation } from '@shared/ipc'
+import type { ToolId } from '@shared/ipc'
 import {
   DEFAULT_CHOICES,
   ROUTE_KEYS,
-  atLeast,
   type HeaderInput,
   type HeaderSummary,
   type ProviderToolConfiguration
@@ -16,13 +15,11 @@ import { ConfigurationSelect } from './ConfigurationSelect'
 export function ConnectionOptionsEditor({
   toolId,
   configuration,
-  installation,
   savedHeaders = [],
   onChange
 }: {
   toolId: ToolId
   configuration: ProviderToolConfiguration<HeaderInput>
-  installation: ToolInstallation
   savedHeaders?: HeaderSummary[]
   onChange: (value: ProviderToolConfiguration<HeaderInput>) => void
 }): React.JSX.Element {
@@ -138,8 +135,7 @@ export function ConnectionOptionsEditor({
             else next.supportsWebsockets = value === 'true'
             onChange(next)
           }}
-          disabled={!atLeast(installation.version, '0.154.0')}
-          hint="仅声明供应商是否支持 Responses WebSocket 传输，不检测网关。当前核对基线为 Codex CLI 0.154.0。"
+          hint="仅声明供应商是否支持 Responses WebSocket 传输，不检测网关。"
         />
       ) : (
         <div className="space-y-4 border-t pt-5">

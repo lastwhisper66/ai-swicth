@@ -4,7 +4,7 @@
 
 在此协调目录解析、共通配置、完整预览、切换、备份、原子写入和恢复。路径设置保存配置目录，并兼容旧版文件路径。共通模板按工具以明文 JSON/TOML 保存；`managed-state.ts` 记录模型选项接管前值、应用值、所选预设签名及署名恢复状态。工具文件、模板、接管状态按组备份，写前检测外部修改，逐文件原子替换、读回校验，失败回滚。切回默认只恢复未被外部修改的接管字段。旧备份缺少状态时清除较新的状态，不回退整个供应商库。
 
-`configuration-migration.ts` 将旧共通模板中的归属字段迁入明确指定的供应商与预设，写前备份，失败回滚；Claude 仅迁移 Header 和路由，思考强度留在共通配置，Fast 和自动压缩按未管理字段保留；Codex 仍迁移模型选项。不应用工具文件、不广播至其他供应商。Codex 的 API Key、地址和模型只写 `config.toml`。预览在主进程脱敏 Key 和任意命名的 Header 值后返回，不写文件。
+`configuration-migration.ts` 将共通模板中的连接或模型归属字段迁入明确指定的供应商与预设，写前备份，失败回滚；Claude 仅迁移 Header 和路由，Fast 和自动压缩按未管理字段保留；Codex 迁移模型选项。两个工具的主思考强度都保留为共通顶层字段。不应用工具文件、不广播至其他供应商。Codex 的 API Key、地址和模型只写 `config.toml`。预览在主进程脱敏 Key 和任意命名的 Header 值后返回，不写文件。
 
 `config-preview.ts` 对 API Key、Claude 的 `ANTHROPIC_AUTH_TOKEN` 和 Codex 的 `experimental_bearer_token` 复用供应商摘要的前后缀脱敏规则；其他令牌、密码和 Header 值保持完全隐藏。已知密钥在其他字符串中的副本也会脱敏，采用单次匹配替换，避免再次处理已生成的脱敏内容。
 

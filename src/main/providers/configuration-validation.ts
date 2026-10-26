@@ -2,7 +2,6 @@ import type { ToolId } from '@shared/ipc'
 import {
   hasControlCharacters,
   CODEX_EFFORTS,
-  CLAUDE_EFFORTS,
   claudeBaseModel,
   REASONING_SUMMARIES,
   VERBOSITIES,
@@ -42,17 +41,14 @@ export function validateModelOptions(value: unknown, toolId: ToolId): ModelOptio
   exactKeys(
     value,
     toolId === 'codex'
-      ? ['context1m', 'effort', 'fast', 'planEffort', 'reasoningSummary', 'verbosity']
-      : ['context1m', 'effort', 'fast', 'autoCompact']
+      ? ['context1m', 'fast', 'planEffort', 'reasoningSummary', 'verbosity']
+      : ['context1m', 'fast', 'autoCompact']
   )
   if (value.context1m !== undefined && value.context1m !== true)
     fail('1M 仅支持请求 1M 或恢复默认。')
   for (const key of ['fast', 'autoCompact']) {
     if (value[key] !== undefined && typeof value[key] !== 'boolean') fail('模型开关必须为布尔值。')
   }
-  const efforts: readonly string[] = toolId === 'codex' ? CODEX_EFFORTS : CLAUDE_EFFORTS
-  if (value.effort !== undefined && !efforts.includes(value.effort as string))
-    fail('此工具不支持所选持久化思考强度。')
   if (value.planEffort !== undefined && !CODEX_EFFORTS.includes(value.planEffort as never))
     fail('计划模式思考强度无效。')
   if (
@@ -62,7 +58,6 @@ export function validateModelOptions(value: unknown, toolId: ToolId): ModelOptio
     fail('思考摘要模式无效。')
   if (value.verbosity !== undefined && !VERBOSITIES.includes(value.verbosity as never))
     fail('回复详细程度无效。')
-  // Keep accepting old libraries, but retired Claude options no longer belong to a preset.
   if (toolId === 'claude-code') return value.context1m ? { context1m: true } : {}
   return structuredClone(value) as ModelOptions
 }

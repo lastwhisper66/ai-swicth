@@ -1,12 +1,11 @@
 import { createModelPreset } from '@renderer/lib/provider-form'
 import { Plus, Star, Trash2 } from 'lucide-react'
-import type { ToolId, ToolInstallation } from '@shared/ipc'
+import type { ToolId } from '@shared/ipc'
 import {
   codexEfforts,
   REASONING_SUMMARIES,
   VERBOSITIES,
   DEFAULT_CHOICES,
-  atLeast,
   claudeBaseModel,
   nativeModel,
   type HeaderInput,
@@ -24,16 +23,13 @@ import { ConfigurationCheckbox } from './ConfigurationCheckbox'
 export function ModelPresetEditor({
   toolId,
   configuration,
-  installation,
   onChange
 }: {
   toolId: ToolId
   configuration: ProviderToolConfiguration<HeaderInput>
-  installation: ToolInstallation
   onChange: (value: ProviderToolConfiguration<HeaderInput>) => void
 }): React.JSX.Element {
   const isClaude = toolId === 'claude-code'
-  const version = installation.version
   const changeModel = (id: string, changes: Partial<ModelPreset>): void =>
     onChange({
       ...configuration,
@@ -72,14 +68,8 @@ export function ModelPresetEditor({
           ? '直接填写模型名，勾选 1M 上下文即可添加 [1m] 后缀。思考强度在共通配置中统一设置。'
           : '同一 API 模型 ID 可保存多个预设。选项随预设保存；1M、Fast 及思考级别的实际可用性由模型和网关决定。'}
       </p>
-      {!isClaude && !version && (
-        <p role="status" className="text-sm text-amber-600">
-          工具版本未知，模型选项暂不可选。请先安装或修复工具并刷新检测。
-        </p>
-      )}
       {configuration.models.map((preset, index) => {
-        const canUseOptions = atLeast(version, '0.154.0')
-        const efforts = canUseOptions ? codexEfforts(preset.model) : []
+        const efforts = codexEfforts(preset.model)
         return (
           <div key={preset.id} className="space-y-4 rounded-lg border p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -181,26 +171,10 @@ export function ModelPresetEditor({
                     value={preset.options.context1m ? 'true' : 'default'}
                     choices={[
                       ['default', '恢复工具默认'],
-                      ...(canUseOptions ? [['true', '请求 1M'] as const] : [])
+                      ['true', '请求 1M']
                     ]}
                     onChange={(value) => option(preset, 'context1m', value)}
-                    disabled={!canUseOptions && !preset.options.context1m}
                     hint="请求固定 1,000,000 tokens；不设置自动压缩阈值。"
-                  />
-                  <ConfigurationSelect
-                    label="思考强度"
-                    value={preset.options.effort ?? 'default'}
-                    choices={[
-                      ['default', '工具默认'],
-                      ...efforts.map((value) => [value, value] as const)
-                    ]}
-                    onChange={(value) => option(preset, 'effort', value)}
-                    disabled={!efforts.length && preset.options.effort === undefined}
-                    hint={
-                      efforts.length
-                        ? '仅列出该官方模型已核对的级别；网关实际支持情况未探测。'
-                        : '自定义别名或此型号的强度尚未核对，请使用工具默认。'
-                    }
                   />
                   <ConfigurationSelect
                     label="Fast mode"
@@ -209,7 +183,6 @@ export function ModelPresetEditor({
                     }
                     choices={DEFAULT_CHOICES}
                     onChange={(value) => option(preset, 'fast', value)}
-                    disabled={!canUseOptions}
                     hint="使用 service_tier = fast，并同步 features.fast_mode。"
                   />
                   <ConfigurationSelect
@@ -220,7 +193,6 @@ export function ModelPresetEditor({
                       ...efforts.map((value) => [value, value] as const)
                     ]}
                     onChange={(value) => option(preset, 'planEffort', value)}
-                    disabled={!canUseOptions}
                   />
                   <ConfigurationSelect
                     label="思考摘要"
@@ -230,7 +202,6 @@ export function ModelPresetEditor({
                       ...REASONING_SUMMARIES.map((value) => [value, value] as const)
                     ]}
                     onChange={(value) => option(preset, 'reasoningSummary', value)}
-                    disabled={!canUseOptions}
                   />
                   <ConfigurationSelect
                     label="回复详细程度"
@@ -240,7 +211,6 @@ export function ModelPresetEditor({
                       ...VERBOSITIES.map((value) => [value, value] as const)
                     ]}
                     onChange={(value) => option(preset, 'verbosity', value)}
-                    disabled={!canUseOptions}
                   />
                 </>
               )}

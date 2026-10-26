@@ -175,7 +175,6 @@ export interface CommonConfig {
   revision: string
   conflicts: string[]
   attributionOriginal?: FieldValue
-  installation: ToolInstallation
 }
 
 export interface MigrateCommonConfigInput {

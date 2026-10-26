@@ -355,7 +355,6 @@ function CommonConfigEditor({
                     root={root}
                     onChange={(value) => setContent(serializeConfiguration(toolId, value))}
                     disabled={busy || configuration.conflicts.length > 0}
-                    installation={configuration.installation}
                     attributionOriginal={configuration.attributionOriginal}
                   />
                 ) : (

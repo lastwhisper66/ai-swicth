@@ -14,7 +14,6 @@ import type {
 import type { GeneratedToolConfiguration, ToolAdapter } from '../adapters/types'
 import {
   attributionStatus,
-  CLAUDE_EFFORTS,
   isObject,
   nativeModel,
   parseConfiguration,
@@ -23,7 +22,6 @@ import {
   serializeConfiguration,
   type ManagedState
 } from '@shared/configuration'
-import { validateCommonVersion } from '../adapters/configuration-policy'
 import { toConfigurationInput, validateConfigurations } from '../providers/configuration-validation'
 import { AppError, isFileSystemError } from '../errors'
 import type { ProviderStore } from '../providers/store'
@@ -38,7 +36,6 @@ import type { CommonConfigStore } from './common-config'
 import { redactConfiguration } from './config-preview'
 import type { PathSettingsStore } from './path-settings'
 import { ManagedStateStore } from './managed-state'
-import type { ToolInstallationService } from './tool-installation'
 import { migrateConfiguration } from './configuration-migration'
 
 interface ConfigurationWrite extends GeneratedToolConfiguration {
@@ -54,8 +51,7 @@ export class SwitchService {
     private readonly backupService: BackupService,
     private readonly adapters: Record<ToolId, ToolAdapter>,
     private readonly commonConfigs: CommonConfigStore,
-    private readonly managedStates: ManagedStateStore,
-    private readonly installations: ToolInstallationService
+    private readonly managedStates: ManagedStateStore
   ) {}
 
   async apply(toolId: ToolId, providerId: string, modelId?: string): Promise<ApplyResult> {
@@ -78,7 +74,6 @@ export class SwitchService {
       const statePath = this.managedStates.getPath(toolId)
       const originalState = await readTarget(statePath)
       const state = stateForTarget(this.managedStates.decode(originalState), target.path)
-      const installation = await this.installations.get(toolId)
       if (originalContent !== null) adapter.parseCurrent(originalContent)
       const configuration = {
         providerId: provider.id,
@@ -87,8 +82,7 @@ export class SwitchService {
         model: nativeModel(toolId, preset),
         apiKey: provider.apiKey,
         preset,
-        configuration: toolConfiguration,
-        version: installation.version
+        configuration: toolConfiguration
       }
       const commonPath = this.commonConfigs.getPath(toolId)
       const originalCommon = await readTarget(commonPath)
@@ -97,12 +91,6 @@ export class SwitchService {
         commonContent === null
           ? originalContent
           : adapter.applyCommon(originalContent, commonContent)
-      if (commonContent !== null)
-        validateCommonVersion(
-          toolId,
-          parseConfiguration(toolId, commonContent),
-          installation.version
-        )
       const generated = adapter.generate(sourceContent, configuration, state.fields)
       const nextState: ManagedState = {
         ...state,
@@ -156,17 +144,6 @@ export class SwitchService {
     const useSaved = !input.fromCurrent && saved !== null
     const common = useSaved ? saved : this.adapters[input.toolId].extractCommon(content)
     const root = parseConfiguration(input.toolId, common)
-    let inheritedEffort = false
-    if (input.toolId === 'claude-code' && root.effortLevel === undefined) {
-      const current = parseConfiguration(
-        input.toolId,
-        this.adapters[input.toolId].extractCommon(content)
-      )
-      if (CLAUDE_EFFORTS.includes(current.effortLevel as never)) {
-        root.effortLevel = current.effortLevel
-        inheritedEffort = true
-      }
-    }
     const conflicts = providerOptionPaths(input.toolId, root).map((path) => path.join('.'))
     const state = stateForTarget(this.managedStates.decode(stateContent), target.path)
     // Conflicting legacy headers are moved server-side; masked editor values can never be saved.
@@ -174,16 +151,14 @@ export class SwitchService {
       root.env.ANTHROPIC_CUSTOM_HEADERS = '••••••••（迁移时由主进程保留原值）'
     return {
       toolId: input.toolId,
-      content:
-        inheritedEffort || conflicts.includes('env.ANTHROPIC_CUSTOM_HEADERS')
-          ? serializeConfiguration(input.toolId, root)
-          : common,
+      content: conflicts.includes('env.ANTHROPIC_CUSTOM_HEADERS')
+        ? serializeConfiguration(input.toolId, root)
+        : common,
       source: useSaved ? 'saved' : 'current',
       templatePath: this.commonConfigs.getPath(input.toolId),
       revision: configurationRevision(target.path, content, template, stateContent),
       conflicts,
-      attributionOriginal: state.attribution,
-      installation: await this.installations.get(input.toolId)
+      attributionOriginal: state.attribution
     }
   }
 
@@ -198,12 +173,6 @@ export class SwitchService {
       }
       const adapter = this.adapters[input.toolId]
       adapter.validateCommon(input.content)
-      const installation = await this.installations.get(input.toolId)
-      validateCommonVersion(
-        input.toolId,
-        parseConfiguration(input.toolId, input.content),
-        installation.version
-      )
       const current = adapter.parseCurrent(content)
       const previousCommon = this.commonConfigs.decode(template) ?? adapter.extractCommon(content)
       if (
@@ -286,7 +255,6 @@ export class SwitchService {
       const commonContent = this.commonConfigs.decode(template)
       const sourceContent =
         commonContent === null ? content : adapter.applyCommon(content, commonContent)
-      const installation = await this.installations.get(input.toolId)
       const state = stateForTarget(this.managedStates.decode(stateContent), target.path)
       const generated = adapter.generate(
         sourceContent,
@@ -297,8 +265,7 @@ export class SwitchService {
           model: nativeModel(input.toolId, preset),
           apiKey,
           preset,
-          configuration,
-          version: installation.version
+          configuration
         },
         state.fields
       )

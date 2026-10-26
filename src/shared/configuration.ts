@@ -24,7 +24,6 @@ export const ROUTE_ENV = {
 
 export interface ModelOptions {
   context1m?: true
-  effort?: string
   fast?: boolean
   autoCompact?: boolean
   planEffort?: string
@@ -138,7 +137,6 @@ export function serializeConfiguration(toolId: ToolId, root: ConfigObject): stri
 
 export const CODEX_MODEL_ROOT = [
   'model_context_window',
-  'model_reasoning_effort',
   'service_tier',
   'plan_mode_reasoning_effort',
   'model_reasoning_summary',
@@ -166,22 +164,8 @@ export function providerOptionPaths(toolId: ToolId, root: ConfigObject): ConfigP
   return paths
 }
 
-export function atLeast(version: string | null | undefined, minimum: string): boolean {
-  if (!version || !/^\d+\.\d+\.\d+(?:[+-].*)?$/u.test(version)) return false
-  const parts = version.split(/[.+-]/u).slice(0, 3).map(Number)
-  const required = minimum.split('.').map(Number)
-  for (let index = 0; index < 3; index++) {
-    if (parts[index] !== required[index]) return parts[index]! > required[index]!
-  }
-  return true
-}
-
 export function claudeBaseModel(model: string): string {
   return model.replace(/(?:\[1m\])+$/iu, '')
-}
-
-export function claudeCanonicalModel(model: string): string {
-  return claudeBaseModel(model).replace(/-\d{8}$/u, '')
 }
 
 export function nativeModel(toolId: ToolId, preset: ModelPreset): string {
@@ -230,7 +214,7 @@ export const COMMON_FIELDS: Record<ToolId, CommonField[]> = {
       path: ['effortLevel'],
       label: '思考强度',
       choices: CLAUDE_EFFORTS.map((effort) => [effort, effort] as const),
-      hint: '所有供应商共用此强度，保存时应用到当前模型，切换供应商后继续沿用。'
+      hint: '顶层配置，适用于所有模型；切换供应商或模型后继续沿用。'
     },
     {
       path: ['env', 'ENABLE_TOOL_SEARCH'],
@@ -275,6 +259,12 @@ export const COMMON_FIELDS: Record<ToolId, CommonField[]> = {
     }
   ],
   codex: [
+    {
+      path: ['model_reasoning_effort'],
+      label: '思考强度',
+      choices: CODEX_EFFORTS.map((effort) => [effort, effort] as const),
+      hint: '顶层配置，适用于所有模型；实际支持的强度由当前模型和网关决定。'
+    },
     {
       path: ['web_search'],
       label: '网络搜索',

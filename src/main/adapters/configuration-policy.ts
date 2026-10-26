@@ -1,27 +1,12 @@
 import {
   hasControlCharacters,
   COMMON_FIELDS,
-  atLeast,
   isObject,
   readField,
-  attributionStatus,
   type ConfigObject
 } from '@shared/configuration'
 import type { ToolId } from '@shared/ipc'
 import { AppError } from '../errors'
-
-export function requireVersion(
-  toolId: ToolId,
-  version: string | null,
-  minimum: string,
-  label: string
-): void {
-  if (!atLeast(version, minimum))
-    throw new AppError(
-      'INCOMPATIBLE_PROVIDER',
-      `${label}需要已核对的 ${toolId === 'codex' ? 'Codex CLI' : 'Claude Code'} ${minimum} 或更高版本（当前：${version ?? '未知'}）。请更新工具并刷新版本检测后重试；未写入配置。`
-    )
-}
 
 export function validateCommonFields(toolId: ToolId, root: ConfigObject): void {
   for (const field of COMMON_FIELDS[toolId]) {
@@ -86,20 +71,4 @@ export function validateCommonFields(toolId: ToolId, root: ConfigObject): void {
           throw new AppError('INVALID_INPUT', '权限规则必须为字符串列表。')
       }
   }
-}
-
-export function validateCommonVersion(
-  toolId: ToolId,
-  root: ConfigObject,
-  version: string | null
-): void {
-  const hasFields = COMMON_FIELDS[toolId].some((field) => readField(root, field.path).exists)
-  if (hasFields && !version)
-    requireVersion(toolId, version, toolId === 'codex' ? '0.154.0' : '2.1.310', '共通配置表单')
-  if (toolId === 'codex' && hasFields)
-    requireVersion(toolId, version, '0.154.0', '本版 Codex 共通选项（兼容核对基线）')
-  if (toolId === 'claude-code' && hasFields)
-    requireVersion(toolId, version, '2.1.310', '本版 Claude 共通选项（兼容核对基线）')
-  if (toolId === 'claude-code' && attributionStatus(root) === 'hidden')
-    requireVersion(toolId, version, '2.1.281', '同时隐藏三类 AI 署名')
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertCircle, ArrowLeft, Eye, EyeOff, Info } from 'lucide-react'
-import type { AppSnapshot, ProviderSummary, ToolId, ToolInstallation } from '@shared/ipc'
+import type { AppSnapshot, ProviderSummary, ToolId } from '@shared/ipc'
 import { nativeModel, type HeaderInput, type ProviderConfigurations } from '@shared/configuration'
 import { ModelPresetEditor } from './ModelPresetEditor'
 import { createModelPreset } from '@renderer/lib/provider-form'
@@ -31,7 +31,6 @@ interface ProviderFormProps {
   provider: ProviderSummary | null
   toolId: ToolId
   currentModelId: string | null
-  installation: ToolInstallation
   onCancel: () => void
   onPendingChange: (pending: boolean) => void
   onSaved: (snapshot: AppSnapshot, message: string) => void
@@ -47,7 +46,6 @@ export function ProviderForm({
   provider,
   toolId,
   currentModelId,
-  installation,
   onCancel,
   onPendingChange,
   onSaved
@@ -313,7 +311,6 @@ export function ProviderForm({
                 <ModelPresetEditor
                   toolId={toolId}
                   configuration={configurations[toolId]!}
-                  installation={installation}
                   onChange={(value) =>
                     setConfigurations((current) => ({ ...current, [toolId]: value }))
                   }
@@ -321,7 +318,6 @@ export function ProviderForm({
                 <ConnectionOptionsEditor
                   toolId={toolId}
                   configuration={configurations[toolId]!}
-                  installation={installation}
                   savedHeaders={provider?.configurations[toolId]?.headers}
                   onChange={(value) =>
                     setConfigurations((current) => ({ ...current, [toolId]: value }))

@@ -1,9 +1,8 @@
 import { useRef, useState } from 'react'
-import type { ToolId, ToolInstallation } from '@shared/ipc'
+import type { ToolId } from '@shared/ipc'
 import {
   COMMON_FIELDS,
   attributionStatus,
-  atLeast,
   isObject,
   readField,
   setField,
@@ -12,13 +11,17 @@ import {
 } from '@shared/configuration'
 import { Input } from '@renderer/components/ui/input'
 import { Field, FieldDescription, FieldLabel } from '@renderer/components/ui/field'
-import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import { ConfigurationSelect } from './ConfigurationSelect'
 import { ConfigurationCheckbox } from './ConfigurationCheckbox'
 
 const formFields: Record<ToolId, ReadonlySet<string>> = {
   'claude-code': new Set(['effortLevel', 'env.ENABLE_TOOL_SEARCH']),
-  codex: new Set(['web_search', 'check_for_update_on_startup', 'history.max_bytes'])
+  codex: new Set([
+    'model_reasoning_effort',
+    'web_search',
+    'check_for_update_on_startup',
+    'history.max_bytes'
+  ])
 }
 
 export function CommonOptionsForm({
@@ -26,14 +29,12 @@ export function CommonOptionsForm({
   root,
   onChange,
   disabled,
-  installation,
   attributionOriginal
 }: {
   toolId: ToolId
   root: ConfigObject
   onChange: (root: ConfigObject) => void
   disabled: boolean
-  installation: ToolInstallation
   attributionOriginal?: FieldValue
 }): React.JSX.Element {
   const attributionBefore = useRef<FieldValue | undefined>(attributionOriginal)
@@ -43,31 +44,21 @@ export function CommonOptionsForm({
     onChange(next)
   }
   const status = attributionStatus(root)
-  const versionDisabled =
-    disabled ||
-    !installation.version ||
-    !atLeast(installation.version, toolId === 'codex' ? '0.154.0' : '2.1.310')
   return (
     <div className="space-y-5">
-      {versionDisabled && !disabled && (
-        <Alert>
-          <AlertDescription>
-            工具版本未知或低于本版核对基线，表单选项暂不可编辑。请更新工具并刷新检测；高级原文保留原有未知字段。
-          </AlertDescription>
-        </Alert>
-      )}
       <div className="grid gap-5">
         {COMMON_FIELDS[toolId]
           .filter((field) => formFields[toolId].has(field.path.join('.')))
           .map((field) => {
             const entry = readField(root, field.path)
             const key = field.path.join('.')
+            const isEffort = ['effortLevel', 'model_reasoning_effort'].includes(key)
             if (field.kind === 'bytes')
               return (
                 <HistorySizeField
                   key={key}
                   value={entry.value}
-                  disabled={versionDisabled}
+                  disabled={disabled}
                   onChange={(value) => update(field.path, value)}
                 />
               )
@@ -85,7 +76,7 @@ export function CommonOptionsForm({
                     type={field.kind === 'integer' ? 'number' : 'text'}
                     min={field.kind === 'integer' ? 1 : undefined}
                     step={field.kind === 'integer' ? 1 : undefined}
-                    disabled={versionDisabled}
+                    disabled={disabled}
                     placeholder="工具默认"
                     onChange={(event) =>
                       update(
@@ -102,7 +93,7 @@ export function CommonOptionsForm({
                 </Field>
               )
             const value = !entry.exists
-              ? field.path[0] === 'effortLevel'
+              ? isEffort
                 ? ''
                 : 'default'
               : field.kind === 'disable'
@@ -113,7 +104,7 @@ export function CommonOptionsForm({
                 key={key}
                 label={field.label}
                 value={value}
-                disabled={versionDisabled}
+                disabled={disabled}
                 choices={
                   field.kind === 'disable'
                     ? [
@@ -123,7 +114,7 @@ export function CommonOptionsForm({
                     : (field.choices ?? [])
                 }
                 hint={field.hint}
-                placeholder={field.path[0] === 'effortLevel' ? '思考强度' : undefined}
+                placeholder={isEffort ? '思考强度' : undefined}
                 onChange={(selected) => {
                   const value =
                     selected === 'default'
@@ -149,7 +140,7 @@ export function CommonOptionsForm({
                 key={tool}
                 tool={tool}
                 root={root}
-                disabled={versionDisabled}
+                disabled={disabled}
                 onChange={onChange}
               />
             ))}
@@ -163,12 +154,11 @@ export function CommonOptionsForm({
                     : status === 'hidden'
                       ? '提交、PR 与会话链接三类署名均已隐藏。'
                       : '使用工具默认署名。'}{' '}
-                  一个开关同时控制三类署名；关闭后恢复接管前设置，保留其他署名子字段。此完整语义的核对基线为
-                  Claude Code 2.1.281。
+                  一个开关同时控制三类署名；关闭后恢复接管前设置，保留其他署名子字段。
                 </>
               }
               checked={status === 'hidden' ? true : status === 'custom' ? 'indeterminate' : false}
-              disabled={disabled || !atLeast(installation.version, '2.1.281')}
+              disabled={disabled}
               onCheckedChange={(checked) => {
                 const next = structuredClone(root)
                 if (checked === true) {

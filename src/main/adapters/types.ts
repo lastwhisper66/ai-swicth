@@ -14,7 +14,6 @@ export interface AppliedProviderConfiguration {
   apiKey: string
   preset: ModelPreset
   configuration: ProviderToolConfiguration<HeaderValue>
-  version: string | null
 }
 
 export interface CurrentToolConfiguration {
