@@ -1,4 +1,4 @@
-import type { FieldValue, ProviderConfigurations, HeaderInput, HeaderValue } from './configuration'
+import type { ProviderConfigurations, HeaderInput, HeaderValue } from './configuration'
 
 export const IPC_CHANNELS = {
   getAppInfo: 'app:get-info',
@@ -41,6 +41,10 @@ export const TOOL_IDS = ['claude-code', 'codex', 'claude-code-wsl', 'codex-wsl']
 
 export type ToolId = (typeof TOOL_IDS)[number]
 
+export const PROVIDER_TOOL_IDS = ['claude-code', 'codex'] as const
+
+export type ProviderToolId = (typeof PROVIDER_TOOL_IDS)[number]
+
 export const TOOL_NAMES: Record<ToolId, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
@@ -52,11 +56,11 @@ export function isWslTool(toolId: ToolId): boolean {
   return toolId === 'claude-code-wsl' || toolId === 'codex-wsl'
 }
 
-export function baseToolId(toolId: ToolId): 'claude-code' | 'codex' {
+export function baseToolId(toolId: ToolId): ProviderToolId {
   return toolId === 'claude-code' || toolId === 'claude-code-wsl' ? 'claude-code' : 'codex'
 }
 
-export type ToolModels = Partial<Record<ToolId, string>>
+export type ToolModels = Partial<Record<ProviderToolId, string>>
 
 export const CLOUD_BACKUP_RETENTION = { defaultCount: 5, options: [1, 3, 5, 10, 20] } as const
 
@@ -118,7 +122,7 @@ export interface ProviderSummary {
   id: string
   name: string
   baseUrl: string
-  tools: ToolId[]
+  tools: ProviderToolId[]
   models: ToolModels
   configurations: ProviderConfigurations
   hasApiKey: boolean
@@ -131,7 +135,7 @@ export interface CreateProviderInput {
   name: string
   baseUrl: string
   apiKey: string
-  tools: ToolId[]
+  tools: ProviderToolId[]
   configurations: ProviderConfigurations<HeaderInput>
 }
 
@@ -147,7 +151,7 @@ export interface UpdateProviderInput {
   name: string
   baseUrl: string
   apiKey: ApiKeyUpdate
-  tools: ToolId[]
+  tools: ProviderToolId[]
   configurations: ProviderConfigurations<HeaderInput>
 }
 
@@ -161,7 +165,7 @@ export interface GetProviderSecretsInput {
 
 export interface ProviderSecrets {
   apiKey: string
-  headers: Partial<Record<ToolId, HeaderValue[]>>
+  headers: Partial<Record<ProviderToolId, HeaderValue[]>>
 }
 
 export type ToolPathSource = 'default' | 'environment' | 'custom'
@@ -191,7 +195,7 @@ export interface ToolStatus {
   model: string | null
 }
 
-export type BackupReason = 'apply' | 'restore' | 'common'
+export type BackupReason = 'apply' | 'restore' | 'common' | 'template'
 
 export interface CommonConfigInput {
   toolId: ToolId
@@ -202,10 +206,10 @@ export interface CommonConfig {
   toolId: ToolId
   content: string
   templatePath: string
-  source: 'saved' | 'current'
+  source: 'saved' | 'current' | 'empty'
   revision: string
   conflicts: string[]
-  attributionOriginal?: FieldValue
+  warnings: string[]
 }
 
 export interface MigrateCommonConfigInput {
@@ -219,6 +223,12 @@ export interface SaveCommonConfigInput {
   toolId: ToolId
   content: string
   revision: string
+}
+
+export interface SaveCommonConfigResult {
+  toolId: ProviderToolId
+  backupId: string
+  message: string
 }
 
 export interface PreviewConfigInput {
@@ -386,7 +396,7 @@ export interface DesktopApi {
   getCommonConfig: (input: CommonConfigInput) => Promise<ApiResult<CommonConfig>>
   saveCommonConfig: (
     input: SaveCommonConfigInput
-  ) => Promise<ApiResult<OperationResponse<ApplyResult>>>
+  ) => Promise<ApiResult<OperationResponse<SaveCommonConfigResult>>>
   migrateCommonConfig: (input: MigrateCommonConfigInput) => Promise<ApiResult<AppSnapshot>>
   previewConfig: (input: PreviewConfigInput) => Promise<ApiResult<ConfigPreview>>
   applyProvider: (input: ApplyProviderInput) => Promise<ApiResult<OperationResponse<ApplyResult>>>

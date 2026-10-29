@@ -3,11 +3,11 @@ import { baseToolId } from '@shared/ipc'
 import { useEffect, useState } from 'react'
 import { AlertCircle, Download, Save } from 'lucide-react'
 import {
-  TOOL_IDS,
+  PROVIDER_TOOL_IDS,
   type AppSnapshot,
   type CommonConfig,
-  type ToolId,
-  type ProviderSummary
+  type ProviderSummary,
+  type ProviderToolId
 } from '@shared/ipc'
 import {
   parseConfiguration,
@@ -48,21 +48,21 @@ export function CommonConfigPage({
   onPendingChange: (pending: boolean) => void
   onSaved: (snapshot: AppSnapshot, message: string) => void
 }): React.JSX.Element {
-  const [toolId, setToolId] = useState<ToolId>('claude-code')
-  const [openedTools, setOpenedTools] = useState<ToolId[]>(['claude-code'])
+  const [toolId, setToolId] = useState<ProviderToolId>('claude-code')
+  const [openedTools, setOpenedTools] = useState<ProviderToolId[]>(['claude-code'])
   return (
     <div className="space-y-5">
       <div>
         <h2 className="text-base font-semibold">共通配置</h2>
         <p className="mt-1 text-sm leading-6 text-muted-foreground">
-          每个工具的所有供应商共享一份配置，地址、密钥和主模型由供应商管理。
+          每个工具的本机与 WSL 共用一份配置。上方快捷修改，下方原文同步更新，也可直接编辑原文。
         </p>
       </div>
       <Tabs
         value={toolId}
         onValueChange={(value) => {
-          if (TOOL_IDS.includes(value as ToolId)) {
-            const id = value as ToolId
+          if (PROVIDER_TOOL_IDS.includes(value as ProviderToolId)) {
+            const id = value as ProviderToolId
             setToolId(id)
             setOpenedTools((previous) => (previous.includes(id) ? previous : [...previous, id]))
           }
@@ -72,7 +72,7 @@ export function CommonConfigPage({
           className="grid w-full grid-cols-2 group-data-[orientation=horizontal]/tabs:h-auto xl:inline-flex xl:w-auto"
           aria-label="共通配置所属工具"
         >
-          {TOOL_IDS.map((id) => (
+          {PROVIDER_TOOL_IDS.map((id) => (
             <TabsTrigger key={id} value={id} disabled={busy} className="h-9 gap-2 px-3">
               <ToolIcon toolId={id} />
               {TOOL_NAMES[id]}
@@ -102,7 +102,7 @@ function CommonConfigEditor({
   onPendingChange,
   onSaved
 }: {
-  toolId: ToolId
+  toolId: ProviderToolId
   providers: ProviderSummary[]
   busy: boolean
   onPendingChange: (pending: boolean) => void
@@ -113,24 +113,25 @@ function CommonConfigEditor({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [reload, setReload] = useState(0)
-  const [editorMode, setEditorMode] = useState('form')
   const [migrationProviderId, setMigrationProviderId] = useState('')
   const [migrationModelId, setMigrationModelId] = useState('')
   const toolName = TOOL_NAMES[toolId]
   const dirty =
     configuration !== null &&
-    (configuration.source === 'current' || content !== configuration.content)
+    (configuration.source !== 'saved' || content !== configuration.content)
   let root: ConfigObject | null = null
   try {
     root = parseConfiguration(toolId, content)
   } catch {
     /* Advanced editor remains available to repair the draft. */
   }
-  const compatibleProviders = providers.filter((provider) => provider.tools.includes(toolId))
+  const compatibleProviders = providers.filter((provider) =>
+    provider.tools.includes(baseToolId(toolId))
+  )
   const migrationProvider =
     compatibleProviders.find((provider) => provider.id === migrationProviderId) ??
     compatibleProviders[0]
-  const migrationConfig = migrationProvider?.configurations[toolId]
+  const migrationConfig = migrationProvider?.configurations[baseToolId(toolId)]
   const migrationModel =
     migrationConfig?.models.find((model) => model.id === migrationModelId) ??
     migrationConfig?.models.find((model) => model.id === migrationConfig.defaultModelId)
@@ -229,7 +230,11 @@ function CommonConfigEditor({
           <div className="flex gap-2">
             <Badge variant="secondary">{baseToolId(toolId) === 'codex' ? 'TOML' : 'JSON'}</Badge>
             <Badge variant="outline">
-              {configuration?.source === 'saved' ? '已保存模板' : '从当前文件提取'}
+              {configuration?.source === 'saved'
+                ? '已保存模板'
+                : configuration?.source === 'current'
+                  ? '从本机配置提取'
+                  : '尚未保存模板'}
             </Badge>
             {dirty && <Badge variant="outline">未保存</Badge>}
           </div>
@@ -237,14 +242,15 @@ function CommonConfigEditor({
             <AlertDialogTrigger asChild>
               <Button type="button" variant="outline" size="sm" disabled={busy || loading}>
                 <Download aria-hidden="true" />
-                从当前文件重新提取
+                从本机配置提取
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>重新提取共通配置？</AlertDialogTitle>
+                <AlertDialogTitle>从本机配置提取共通配置？</AlertDialogTitle>
                 <AlertDialogDescription>
-                  将读取当前工具文件并去除供应商字段，替换编辑器中的内容。尚未保存的编辑会丢失。
+                  将读取本机 {toolName}{' '}
+                  配置，去除供应商字段后替换编辑器中的内容。尚未保存的编辑会丢失；保存仅更新应用中的共用模板。
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -280,6 +286,11 @@ function CommonConfigEditor({
         ) : (
           configuration && (
             <div className="space-y-5">
+              {configuration.warnings.map((warning) => (
+                <Alert key={warning}>
+                  <AlertDescription>{warning}</AlertDescription>
+                </Alert>
+              ))}
               {configuration.conflicts.length > 0 && (
                 <Alert className="space-y-4">
                   <AlertDescription className="space-y-4">
@@ -331,7 +342,8 @@ function CommonConfigEditor({
                               </AlertDialogTitle>
                               <AlertDialogDescription>
                                 将读取已保存模板，把可映射字段迁移到所选连接和模型，替换其对应选项和请求头，然后从模板移除这些字段。未保存草稿不会参与迁移，并会在迁移完成后丢弃；其他模型的
-                                目标工具文件不变。Claude 的思考强度统一由共通配置管理。
+                                目标工具文件不变。所选供应商的修改由本机与 WSL
+                                共用，需分别手动应用。Claude 的思考强度统一由共通配置管理。
                               </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
@@ -349,100 +361,84 @@ function CommonConfigEditor({
                   </AlertDescription>
                 </Alert>
               )}
-              <Tabs value={editorMode} onValueChange={setEditorMode}>
-                <TabsList aria-label="共通配置编辑方式">
-                  <TabsTrigger value="form" disabled={busy}>
-                    配置表单
-                  </TabsTrigger>
-                  <TabsTrigger value="raw" disabled={busy}>
-                    高级原文
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent value="form" className="mt-3">
-                  {root ? (
-                    <CommonOptionsForm
-                      key={configuration.revision}
-                      toolId={toolId}
-                      root={root}
-                      onChange={(value) => setContent(serializeConfiguration(toolId, value))}
-                      disabled={busy || configuration.conflicts.length > 0}
-                      attributionOriginal={configuration.attributionOriginal}
-                    />
-                  ) : (
-                    <Alert variant="destructive">
-                      <AlertDescription>
-                        草稿格式无效，请切换“高级原文”修复后继续。未保存任何内容。
-                      </AlertDescription>
-                    </Alert>
-                  )}
-                </TabsContent>
-                <TabsContent value="raw" className="mt-3">
-                  <Field className="min-w-0 gap-3">
-                    <FieldLabel htmlFor={`${toolId}-common-content`}>
-                      {toolName} 共通配置
-                    </FieldLabel>
-                    <Textarea
-                      id={`${toolId}-common-content`}
-                      value={content}
-                      onChange={(event) => setContent(event.target.value)}
-                      disabled={busy}
-                      spellCheck={false}
-                      autoCapitalize="none"
-                      wrap="off"
-                      aria-describedby={`${toolId}-common-description`}
-                      className="h-96 resize-y field-sizing-fixed font-mono text-xs leading-6"
-                    />
-                    <FieldDescription
-                      id={`${toolId}-common-description`}
-                      className="text-xs leading-6"
-                    >
-                      {baseToolId(toolId) === 'claude-code'
-                        ? '共通字段与表单共享同一草稿；保留未知字段，供应商连接、路由与模型选项请在供应商侧设置。'
-                        : '可管理审批、沙箱、历史和 MCP 等字段；不能包含 model、model_provider、model_providers，供应商地址和 API Key 统一由 config.toml 中的供应商配置管理。'}
-                      <span className="block">
-                        删除模板已有字段会同步清除对应覆盖，保留模板之外的无关配置。保存会立即应用，供应商和模型选项保持不变。
-                      </span>
-                    </FieldDescription>
-                  </Field>
-                </TabsContent>
-              </Tabs>
+              <section className="space-y-4" aria-label="快捷修改">
+                <div>
+                  <h3 className="text-sm font-medium">快捷修改</h3>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    常用选项的修改会立即反映在下方原文中，保存后才会写入配置。
+                  </p>
+                </div>
+                {root ? (
+                  <CommonOptionsForm
+                    key={configuration.revision}
+                    toolId={toolId}
+                    root={root}
+                    onChange={(value) => setContent(serializeConfiguration(toolId, value))}
+                    disabled={busy || configuration.conflicts.length > 0}
+                  />
+                ) : (
+                  <Alert variant="destructive">
+                    <AlertDescription>
+                      原文格式无效，请在下方修复后继续使用快捷修改。未保存任何内容。
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </section>
+              <section className="border-t pt-5" aria-label="共通配置原文">
+                <Field className="min-w-0 gap-3">
+                  <FieldLabel htmlFor={`${toolId}-common-content`}>
+                    {toolName} 共通配置原文
+                  </FieldLabel>
+                  <Textarea
+                    id={`${toolId}-common-content`}
+                    value={content}
+                    onChange={(event) => setContent(event.target.value)}
+                    disabled={busy}
+                    spellCheck={false}
+                    autoCapitalize="none"
+                    wrap="off"
+                    aria-describedby={`${toolId}-common-description`}
+                    className="h-96 resize-y field-sizing-fixed font-mono text-xs leading-6"
+                  />
+                  <FieldDescription
+                    id={`${toolId}-common-description`}
+                    className="text-xs leading-6"
+                  >
+                    {baseToolId(toolId) === 'claude-code'
+                      ? '共通字段与表单共享同一草稿；保留未知字段，供应商连接、路由与模型选项请在供应商侧设置。'
+                      : '可管理审批、沙箱、历史和 MCP 等字段；不能包含 model、model_provider、model_providers，供应商地址和 API Key 统一由 config.toml 中的供应商配置管理。'}
+                    <span className="block">
+                      保存仅更新应用中的共用模板。在本机或 WSL
+                      应用供应商时，才会合并写入对应工具配置。
+                    </span>
+                  </FieldDescription>
+                </Field>
+              </section>
               <p className="text-xs leading-6 break-all text-muted-foreground">
                 本地模板：{configuration.templatePath}
               </p>
             </div>
           )
         )}
-        <div className="flex justify-end border-t pt-4">
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button
-                type="button"
-                disabled={
-                  busy ||
-                  loading ||
-                  !configuration ||
-                  !dirty ||
-                  !root ||
-                  configuration.conflicts.length > 0
-                }
-              >
-                <Save aria-hidden="true" />
-                保存并应用
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>保存并应用 {toolName} 共通配置？</AlertDialogTitle>
-                <AlertDialogDescription>
-                  将立即更新当前工具配置和共通模板，保留供应商字段。未包含的通用字段将被删除；操作前会一起备份，失败时自动回滚。之后应用任何供应商都会使用这份模板，请新建或重启会话使配置生效。
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>取消</AlertDialogCancel>
-                <AlertDialogAction onClick={() => void save()}>确认保存并应用</AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+        <div className="flex flex-wrap items-center justify-between gap-4 border-t pt-4">
+          <p className="text-xs leading-5 text-muted-foreground">
+            保存到 AI Switch，应用供应商时生效。
+          </p>
+          <Button
+            type="button"
+            onClick={() => void save()}
+            disabled={
+              busy ||
+              loading ||
+              !configuration ||
+              !dirty ||
+              !root ||
+              configuration.conflicts.length > 0
+            }
+          >
+            <Save aria-hidden="true" />
+            保存共通配置
+          </Button>
         </div>
       </CardContent>
     </Card>

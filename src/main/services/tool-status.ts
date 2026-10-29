@@ -123,7 +123,7 @@ export class ToolStatusService {
       )
       const matches: Array<{ provider: ResolvedProvider; preset: ModelPreset }> = []
       for (const provider of providers) {
-        const configuration = provider.configurations[toolId]
+        const configuration = provider.configurations[baseToolId(toolId)]
         if (!configuration || !providerMatches(toolId, provider, current.baseUrl, current.apiKey))
           continue
         for (const preset of configuration.models) {
@@ -221,7 +221,9 @@ function providerMatches(
   apiKey: string | null
 ): boolean {
   return (
-    provider.tools.includes(toolId) && provider.baseUrl === baseUrl && provider.apiKey === apiKey
+    provider.tools.includes(baseToolId(toolId)) &&
+    provider.baseUrl === baseUrl &&
+    provider.apiKey === apiKey
   )
 }
 

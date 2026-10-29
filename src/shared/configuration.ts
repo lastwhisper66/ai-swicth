@@ -1,6 +1,6 @@
 import { baseToolId } from '@shared/ipc'
 import { parse, stringify } from 'smol-toml'
-import type { ToolId } from './ipc'
+import type { ProviderToolId, ToolId } from './ipc'
 
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const
 export const CODEX_EFFORTS = [
@@ -66,7 +66,7 @@ export interface ProviderToolConfiguration<H = HeaderSummary> {
 }
 
 export type ProviderConfigurations<H = HeaderSummary> = Partial<
-  Record<ToolId, ProviderToolConfiguration<H>>
+  Record<ProviderToolId, ProviderToolConfiguration<H>>
 >
 
 export type ConfigObject = Record<string, unknown>
@@ -86,6 +86,7 @@ export interface ManagedState {
   fields: OwnedField[]
   selection?: { providerId: string; modelId: string; signature?: string }
   attribution?: FieldValue
+  common?: string
 }
 
 export function isObject(value: unknown): value is ConfigObject {

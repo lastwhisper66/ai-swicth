@@ -48,7 +48,8 @@ export function ProviderForm({
   onPendingChange,
   onSaved
 }: ProviderFormProps): React.JSX.Element {
-  const toolName = TOOL_NAMES[toolId]
+  const providerToolId = baseToolId(toolId)
+  const toolName = TOOL_NAMES[providerToolId]
   const [form, setForm] = useState<ProviderFormState>(() => ({
     name: provider?.name ?? '',
     baseUrl: provider?.baseUrl ?? '',
@@ -76,7 +77,7 @@ export function ProviderForm({
         ])
       )
     const model = createModelPreset()
-    return { [toolId]: { models: [model], defaultModelId: model.id, headers: [] } }
+    return { [providerToolId]: { models: [model], defaultModelId: model.id, headers: [] } }
   })
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState<string | null>(null)
@@ -91,7 +92,7 @@ export function ProviderForm({
     '无法读取已保存的 API Key 和请求头值，请重试或重新打开应用。'
   )
   const [pending, setPending] = useState(false)
-  const configuration = configurations[toolId]!
+  const configuration = configurations[providerToolId]!
   const modelId =
     configuration.models.find((model) => model.id === currentModelId)?.id ??
     configuration.defaultModelId
@@ -104,7 +105,7 @@ export function ProviderForm({
   async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
     if (pending || secrets.loading) return
-    const tools = provider?.tools ?? [toolId]
+    const tools = provider?.tools ?? [providerToolId]
 
     setPending(true)
     onPendingChange(true)
@@ -168,7 +169,7 @@ export function ProviderForm({
                 {provider ? '编辑' : '添加'} {toolName} 供应商
               </h2>
               <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                保存供应商后，可前往 {toolName} 页面应用配置。
+                本机与 WSL 共用此供应商，保存后可在对应工具页面应用配置。
               </p>
             </div>
           </div>
@@ -279,9 +280,9 @@ export function ProviderForm({
 
                 <ModelPresetEditor
                   toolId={toolId}
-                  configuration={configurations[toolId]!}
+                  configuration={configuration}
                   onChange={(value) =>
-                    setConfigurations((current) => ({ ...current, [toolId]: value }))
+                    setConfigurations((current) => ({ ...current, [providerToolId]: value }))
                   }
                 />
                 <details className="group rounded-lg border bg-muted/15">
@@ -300,12 +301,12 @@ export function ProviderForm({
                   <div className="border-t p-4 [&>section]:border-t-0 [&>section]:pt-0">
                     <ConnectionOptionsEditor
                       toolId={toolId}
-                      configuration={configurations[toolId]!}
-                      savedHeaders={provider?.configurations[toolId]?.headers}
-                      savedValues={secrets.value?.headers[toolId]}
+                      configuration={configuration}
+                      savedHeaders={provider?.configurations[providerToolId]?.headers}
+                      savedValues={secrets.value?.headers[providerToolId]}
                       loadingSecrets={secrets.loading}
                       onChange={(value) =>
-                        setConfigurations((current) => ({ ...current, [toolId]: value }))
+                        setConfigurations((current) => ({ ...current, [providerToolId]: value }))
                       }
                     />
                   </div>

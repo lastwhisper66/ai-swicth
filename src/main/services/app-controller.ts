@@ -14,6 +14,7 @@ import type {
   MigrateCommonConfigInput,
   ConfigPreview,
   SaveCommonConfigInput,
+  SaveCommonConfigResult,
   PreviewConfigInput,
   DeleteProviderInput,
   OperationResponse,
@@ -213,7 +214,9 @@ export class AppController {
     return this.withMutation(() => this.switchService.previewConfig(input))
   }
 
-  async saveCommonConfig(input: SaveCommonConfigInput): Promise<OperationResponse<ApplyResult>> {
+  async saveCommonConfig(
+    input: SaveCommonConfigInput
+  ): Promise<OperationResponse<SaveCommonConfigResult>> {
     return this.withMutation(async () => {
       const operation = await this.switchService.saveCommonConfig(input)
       return { operation, snapshot: await this.getSnapshot() }

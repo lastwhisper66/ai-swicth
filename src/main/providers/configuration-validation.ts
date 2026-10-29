@@ -9,6 +9,7 @@ import {
   ROUTE_KEYS,
   isObject,
   type ProviderConfigurations,
+  type ProviderToolConfiguration,
   type HeaderInput,
   type HeaderValue,
   type ModelOptions,
@@ -63,15 +64,15 @@ export function validateModelOptions(value: unknown, toolId: ToolId): ModelOptio
   return structuredClone(value) as ModelOptions
 }
 
-export function validateConfigurations(
+export function validateConfigurations<T extends ToolId>(
   value: unknown,
-  tools: ToolId[],
-  previous: ProviderConfigurations<HeaderValue> = {},
+  tools: T[],
+  previous: Partial<Record<T, ProviderToolConfiguration<HeaderValue>>> = {},
   stored = false
-): ProviderConfigurations<HeaderValue> {
+): Partial<Record<T, ProviderToolConfiguration<HeaderValue>>> {
   if (!isObject(value)) fail('请配置供应商的模型列表。')
   exactKeys(value, tools)
-  const result: ProviderConfigurations<HeaderValue> = {}
+  const result: Partial<Record<T, ProviderToolConfiguration<HeaderValue>>> = {}
   for (const toolId of tools) {
     const config = value[toolId]
     if (!isObject(config)) fail('每个适用工具都需要一份模型配置。')

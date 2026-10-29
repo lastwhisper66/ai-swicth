@@ -32,19 +32,19 @@ interface ToolConfigPageProps {
 const toolDetails = {
   'claude-code': {
     name: 'Claude Code',
-    description: '管理 Claude Code 使用的供应商与模型。'
+    description: '管理 Claude Code 使用的供应商与模型，供应商与 WSL 共用。'
   },
   codex: {
     name: 'Codex',
-    description: '管理 Codex 使用的供应商与模型。'
+    description: '管理 Codex 使用的供应商与模型，供应商与 WSL 共用。'
   },
   'claude-code-wsl': {
     name: 'Claude Code WSL',
-    description: '管理 WSL 中 Claude Code 使用的供应商与模型。配置独立于 Windows 本机。'
+    description: '与本机 Claude Code 共用供应商，应用到当前 WSL 配置。'
   },
   'codex-wsl': {
     name: 'Codex WSL',
-    description: '管理 WSL 中 Codex 使用的供应商与模型。配置独立于 Windows 本机。'
+    description: '与本机 Codex 共用供应商，应用到当前 WSL 配置。'
   }
 } as const
 
@@ -60,7 +60,9 @@ export function ToolConfigPage({
   onDelete
 }: ToolConfigPageProps): React.JSX.Element {
   const details = toolDetails[toolId]
-  const compatibleProviders = providers.filter((provider) => provider.tools.includes(toolId))
+  const compatibleProviders = providers.filter((provider) =>
+    provider.tools.includes(baseToolId(toolId))
+  )
 
   return (
     <div className="space-y-6">

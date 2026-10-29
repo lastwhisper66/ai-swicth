@@ -1,6 +1,7 @@
 import { Check, CircleCheck, Cpu, Globe, KeyRound, Pencil, Play, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import type { ProviderSummary, ToolId } from '@shared/ipc'
+import { baseToolId } from '@shared/ipc'
 import { nativeModel } from '@shared/configuration'
 import { cn } from '@renderer/lib/utils'
 import {
@@ -30,6 +31,7 @@ interface ProviderRowProps {
   pending?: boolean
   onApply?: (modelId: string) => void
   currentModelId?: string | null
+  usageLabels?: string[]
   onEdit: () => void
   onDelete: () => void
 }
@@ -43,9 +45,10 @@ export function ProviderRow({
   onApply,
   onEdit,
   onDelete,
-  currentModelId
+  currentModelId,
+  usageLabels
 }: ProviderRowProps): React.JSX.Element {
-  const config = provider.configurations[toolId]!
+  const config = provider.configurations[baseToolId(toolId)]!
   const [selectedModelId, setSelectedModelId] = useState<string>()
   const selected =
     config.models.find(
@@ -65,12 +68,18 @@ export function ProviderRow({
           <h3 className="min-w-0 truncate text-base font-semibold" title={provider.name}>
             {provider.name}
           </h3>
-          {isCurrent && (
+          {isCurrent && !usageLabels && (
             <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">
               <Check aria-hidden="true" />
               当前使用
             </Badge>
           )}
+          {usageLabels?.map((label) => (
+            <Badge key={label} className="bg-emerald-600 text-white hover:bg-emerald-600">
+              <Check aria-hidden="true" />
+              {label} 使用中
+            </Badge>
+          ))}
           {provider.tools.length > 1 && <Badge variant="outline">共用供应商</Badge>}
         </div>
         <dl

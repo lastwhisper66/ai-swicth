@@ -1,6 +1,13 @@
-import { randomUUID } from 'node:crypto'
-import type { CreateProviderInput, ProviderSummary, ToolId, UpdateProviderInput } from '@shared/ipc'
-import { TOOL_IDS } from '@shared/ipc'
+import { createHash, randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
+import type {
+  CreateProviderInput,
+  ProviderSummary,
+  ProviderToolId,
+  ToolId,
+  UpdateProviderInput
+} from '@shared/ipc'
+import { baseToolId, PROVIDER_TOOL_IDS, TOOL_IDS } from '@shared/ipc'
 import {
   hasControlCharacters,
   isObject,
@@ -12,14 +19,14 @@ import { readOptionalText, writeTextAtomic } from '../utils/files'
 import { validateConfigurations } from './configuration-validation'
 import { maskApiKey } from '../utils/api-key'
 
-const STORAGE_VERSION = 2
+const STORAGE_VERSION = 3
 
 export interface PortableProvider {
   id: string
   name: string
   baseUrl: string
   apiKey: string
-  tools: ToolId[]
+  tools: ProviderToolId[]
   configurations: ProviderConfigurations<HeaderValue>
   createdAt: string
   updatedAt: string
@@ -41,7 +48,7 @@ export class ProviderStore {
   }
 
   async create(input: CreateProviderInput): Promise<ProviderSummary> {
-    const basic = validateBasic(input)
+    const basic = validateBasic(input, PROVIDER_TOOL_IDS)
     const configurations = validateConfigurations(input.configurations, basic.tools)
     const apiKey = validateApiKey(input.apiKey)
     const document = await this.load()
@@ -64,7 +71,7 @@ export class ProviderStore {
     const document = await this.load()
     const record = document.providers.find((item) => item.id === input.id)
     if (!record) throw new AppError('PROVIDER_NOT_FOUND', '供应商不存在，可能已被删除。')
-    const basic = validateBasic(input)
+    const basic = validateBasic(input, PROVIDER_TOOL_IDS)
     assertUnique(document.providers, basic.name, basic.tools, input.id)
     const configurations = validateConfigurations(
       input.configurations,
@@ -79,7 +86,7 @@ export class ProviderStore {
 
   async resolveDraft(input: CreateProviderInput | UpdateProviderInput): Promise<ResolvedProvider> {
     const previous = 'id' in input ? await this.getResolved(input.id) : null
-    const basic = validateBasic(input)
+    const basic = validateBasic(input, PROVIDER_TOOL_IDS)
     const apiKey =
       typeof input.apiKey === 'string'
         ? validateApiKey(input.apiKey)
@@ -127,7 +134,8 @@ export class ProviderStore {
   }
 
   validatePortable(providers: unknown[]): PortableProvider[] {
-    return decodeDocument({ version: STORAGE_VERSION, providers }).providers
+    // Portable records may come from backups with environment-specific tool IDs.
+    return decodeDocument({ version: 2, providers }).providers
   }
 
   private async load(): Promise<ProviderDocument> {
@@ -151,15 +159,22 @@ export class ProviderStore {
 function decodeDocument(value: unknown): ProviderDocument {
   if (
     !isObject(value) ||
-    ![1, STORAGE_VERSION].includes(value.version as number) ||
+    ![1, 2, STORAGE_VERSION].includes(value.version as number) ||
     !Array.isArray(value.providers)
   )
     throw new Error('Invalid provider document')
   const providers: PortableProvider[] = []
+  const originals: Array<{ id: string; name: string; tools: ToolId[] }> = []
   for (const raw of value.providers) {
     if (!isObject(raw) || !isUuid(raw.id) || !isIsoDate(raw.createdAt) || !isIsoDate(raw.updatedAt))
       throw new Error('Invalid record')
-    const basic = validateBasic(raw)
+    const basic = validateBasic(
+      raw,
+      value.version === STORAGE_VERSION ? PROVIDER_TOOL_IDS : TOOL_IDS
+    )
+    if (originals.some((provider) => provider.id === raw.id)) throw new Error('Duplicate ID')
+    assertUnique(originals, basic.name, basic.tools)
+    originals.push({ id: raw.id, name: basic.name, tools: basic.tools })
     let configurations = raw.configurations
     // Deterministic IDs migrate reads without modifying the library or target files.
     if (configurations === undefined && isObject(raw.models)) {
@@ -178,24 +193,52 @@ function decodeDocument(value: unknown): ProviderDocument {
         })
       )
     }
+    const decoded = validateConfigurations(configurations, basic.tools, {}, true)
+    const shared: ProviderConfigurations<HeaderValue> = {}
+    const wsl: ProviderConfigurations<HeaderValue> = {}
+    for (const toolId of basic.tools) {
+      const family = baseToolId(toolId)
+      const native = decoded[family]
+      const configuration = decoded[toolId]!
+      if (toolId !== family && native && !isDeepStrictEqual(native, configuration)) {
+        wsl[family] = configuration
+      } else {
+        shared[family] = native ?? configuration
+      }
+    }
     const record: PortableProvider = {
       id: raw.id,
       ...basic,
+      tools: PROVIDER_TOOL_IDS.filter((toolId) => shared[toolId]),
       apiKey: raw.apiKey === '' ? '' : validateApiKey(raw.apiKey),
-      configurations: validateConfigurations(configurations, basic.tools, {}, true),
+      configurations: shared,
       createdAt: raw.createdAt,
       updatedAt: raw.updatedAt
     }
-    if (providers.some((provider) => provider.id === record.id)) throw new Error('Duplicate ID')
-    assertUnique(providers, record.name, record.tools)
+    record.name = migrationName(providers, record)
     providers.push(record)
+    const wslTools = PROVIDER_TOOL_IDS.filter((toolId) => wsl[toolId])
+    if (wslTools.length) {
+      const variant = {
+        ...record,
+        id: migratedWslId(record.id),
+        tools: wslTools,
+        configurations: wsl,
+        name: `${record.name.slice(0, 52)}（原 WSL）`
+      }
+      variant.name = migrationName(providers, variant)
+      providers.push(variant)
+    }
   }
+  if (new Set(providers.map((provider) => provider.id)).size !== providers.length)
+    throw new Error('Duplicate ID')
   return { version: STORAGE_VERSION, providers }
 }
 
-function validateBasic(
-  input: Record<string, unknown> | CreateProviderInput | UpdateProviderInput
-): { name: string; baseUrl: string; tools: ToolId[] } {
+function validateBasic<T extends ToolId>(
+  input: Record<string, unknown> | CreateProviderInput | UpdateProviderInput,
+  allowedTools: readonly T[]
+): { name: string; baseUrl: string; tools: T[] } {
   const errors: Record<string, string> = {}
   const name = typeof input.name === 'string' ? input.name.trim() : ''
   if (!name || name.length > 60 || hasControlCharacters(name))
@@ -223,14 +266,43 @@ function validateBasic(
   if (
     !Array.isArray(tools) ||
     tools.length < 1 ||
-    tools.length > TOOL_IDS.length ||
+    tools.length > allowedTools.length ||
     new Set(tools).size !== tools.length ||
-    !tools.every((id) => TOOL_IDS.includes(id))
+    !tools.every((id) => allowedTools.includes(id))
   )
     errors.tools = '请选择有效的适用工具。'
   if (Object.keys(errors).length)
     throw new AppError('INVALID_INPUT', '供应商信息有误，请检查后重试。', errors)
-  return { name, baseUrl, tools: tools as ToolId[] }
+  return { name, baseUrl, tools: tools as T[] }
+}
+
+/** Keep distinct legacy WSL configurations as shared choices with stable identities. */
+function migratedWslId(id: string): string {
+  const bytes = createHash('sha1')
+    .update(Buffer.from('6ba7b8119dad11d180b400c04fd430c8', 'hex'))
+    .update(`ai-switch:provider:${id}:wsl`)
+    .digest()
+    .subarray(0, 16)
+  bytes[6] = (bytes[6] & 0x0f) | 0x50
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = bytes.toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+function migrationName(providers: PortableProvider[], record: PortableProvider): string {
+  let name = record.name
+  let suffix = 1
+  while (
+    providers.some(
+      (provider) =>
+        provider.name.toLocaleLowerCase() === name.toLocaleLowerCase() &&
+        provider.tools.some((toolId) => record.tools.includes(toolId))
+    )
+  ) {
+    const label = `（迁移 ${suffix++}）`
+    name = `${record.name.slice(0, 60 - label.length)}${label}`
+  }
+  return name
 }
 
 function validateApiKey(value: unknown): string {
@@ -280,7 +352,7 @@ function toSummary(provider: PortableProvider): ProviderSummary {
 }
 
 function assertUnique(
-  providers: PortableProvider[],
+  providers: Array<{ id: string; name: string; tools: ToolId[] }>,
   name: string,
   tools: ToolId[],
   id?: string

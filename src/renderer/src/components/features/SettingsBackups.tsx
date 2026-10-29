@@ -341,14 +341,15 @@ function BackupRow({
           <Badge variant="secondary">
             {backup.reason === 'apply'
               ? '应用前'
-              : backup.reason === 'common'
+              : backup.reason === 'common' || backup.reason === 'template'
                 ? '共通配置修改前'
                 : '恢复前'}
           </Badge>
           <span className="text-xs text-muted-foreground">{formatDate(backup.createdAt)}</span>
         </ItemTitle>
         <ItemDescription className="truncate text-xs" title={backup.targetPath}>
-          {backup.providerName ?? '外部或未匹配配置'} · {backup.targetPath}
+          {backup.reason === 'template' ? '共用模板' : (backup.providerName ?? '外部或未匹配配置')}{' '}
+          · {backup.targetPath}
         </ItemDescription>
         {backup.relatedPaths.length > 0 && (
           <ItemDescription className="truncate text-xs" title={backup.relatedPaths.join('、')}>
@@ -371,11 +372,15 @@ function BackupRow({
               </AlertDialogMedia>
               <AlertDialogTitle>恢复这份备份？</AlertDialogTitle>
               <AlertDialogDescription className="wrap-anywhere max-h-40 overflow-y-auto">
-                {backup.originalFileExisted
-                  ? `将恢复 ${backup.targetPath}。`
-                  : `这份备份表示原文件不存在，将删除当前文件 ${backup.targetPath}。`}
-                {backup.relatedPaths.length > 0 && '共通模板也会一起恢复到备份时的状态。'}
-                当前状态会先创建一份新的安全备份，操作后请新建或重启会话。
+                {backup.reason === 'template'
+                  ? '将恢复 AI Switch 中的共通模板，本机和 WSL 后续应用供应商时生效。'
+                  : backup.originalFileExisted
+                    ? `将恢复 ${backup.targetPath}。`
+                    : `这份备份表示原文件不存在，将删除当前文件 ${backup.targetPath}。`}
+                {backup.relatedPaths.length > 0 &&
+                  '相关模板和接管状态也会恢复；共通模板由本机与 WSL 共用，恢复后两边后续应用都会使用该模板。'}
+                当前状态会先创建一份新的安全备份。
+                {backup.reason !== 'template' && '操作后请新建或重启会话。'}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -384,7 +389,9 @@ function BackupRow({
                 variant={backup.originalFileExisted ? 'default' : 'destructive'}
                 onClick={() => onRestore(backup.id)}
               >
-                {backup.originalFileExisted ? '确认恢复' : '确认删除并恢复'}
+                {backup.reason === 'template' || backup.originalFileExisted
+                  ? '确认恢复'
+                  : '确认删除并恢复'}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

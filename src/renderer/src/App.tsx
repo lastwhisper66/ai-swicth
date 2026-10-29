@@ -1,6 +1,7 @@
 import { startTransition, useEffect, useState } from 'react'
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
+import { baseToolId } from '@shared/ipc'
 import type {
   ApiResult,
   AppSnapshot,
@@ -299,7 +300,7 @@ function App(): React.JSX.Element {
   function openProviderEditor(toolId: ToolId, provider: ProviderSummary | null = null): void {
     setView('settings')
     setSettingsSection('providers')
-    setSettingsTool(toolId)
+    setSettingsTool(baseToolId(toolId))
     setProviderEditor({ provider, toolId })
   }
 

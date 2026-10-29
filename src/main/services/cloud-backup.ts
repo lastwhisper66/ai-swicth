@@ -13,7 +13,7 @@ import type {
   CloudBackupSettings,
   CloudBackupSettingsInput
 } from '@shared/ipc'
-import { TOOL_IDS, isWslTool, type ToolId } from '@shared/ipc'
+import { PROVIDER_TOOL_IDS, TOOL_IDS, isWslTool, type ToolId } from '@shared/ipc'
 import { parseConfiguration, type ManagedState } from '@shared/configuration'
 import { AppError } from '../errors'
 import type { PortableProvider, ProviderStore } from '../providers/store'
@@ -105,8 +105,9 @@ export class CloudBackupService {
         objectKey,
         createdAt: document.createdAt,
         providerCount: document.providers.length,
-        commonConfigCount: TOOL_IDS.filter((toolId) => document.commonConfigs[toolId] !== null)
-          .length,
+        commonConfigCount: PROVIDER_TOOL_IDS.filter(
+          (toolId) => document.commonConfigs[toolId] !== null
+        ).length,
         message:
           warnings.length > 0
             ? '已将供应商配置和共通配置加密上传到云端。'
@@ -151,7 +152,9 @@ export class CloudBackupService {
           const state = document.managedStates?.[toolId]
           if (state !== undefined && state !== null)
             this.managedStates.decode(JSON.stringify(state))
+          if (state?.common !== undefined) parseConfiguration(toolId, state.common)
         }
+        document.commonConfigs = this.commonConfigs.normalizePortable(document.commonConfigs)
       } catch {
         throw new AppError(
           'CLOUD_BACKUP_INVALID',
@@ -182,8 +185,9 @@ export class CloudBackupService {
         objectKey,
         createdAt: document.createdAt,
         providerCount: document.providers.length,
-        commonConfigCount: TOOL_IDS.filter((toolId) => document.commonConfigs[toolId] !== null)
-          .length,
+        commonConfigCount: PROVIDER_TOOL_IDS.filter(
+          (toolId) => document.commonConfigs[toolId] !== null
+        ).length,
         message: `已从最新云端备份恢复 ${document.providers.length} 个供应商、模型预设和共通配置，请手动应用到对应工具。`,
         warnings: []
       }

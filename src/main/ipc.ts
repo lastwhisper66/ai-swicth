@@ -4,6 +4,7 @@ import {
   IPC_CHANNELS,
   CLOUD_BACKUP_RETENTION,
   TOOL_IDS,
+  PROVIDER_TOOL_IDS,
   type ApiResult,
   type AppInfo,
   type AppSettingsInput,
@@ -24,6 +25,7 @@ import {
   type SetNativeThemeInput,
   type SetToolPathInput,
   type ToolId,
+  type ProviderToolId,
   type UpdateProviderInput
 } from '@shared/ipc'
 import type { HeaderInput, ProviderConfigurations } from '@shared/configuration'
@@ -428,9 +430,12 @@ function expectToolId(value: unknown): ToolId {
   return value as ToolId
 }
 
-function expectTools(value: unknown): ToolId[] {
-  if (!Array.isArray(value) || value.length > TOOL_IDS.length) throw invalidRequest()
-  return value.map(expectToolId)
+function expectTools(value: unknown): ProviderToolId[] {
+  if (!Array.isArray(value) || value.length > PROVIDER_TOOL_IDS.length) throw invalidRequest()
+  return value.map((toolId) => {
+    if (!PROVIDER_TOOL_IDS.includes(toolId)) throw invalidRequest()
+    return toolId as ProviderToolId
+  })
 }
 
 function expectConfigurations(value: unknown): ProviderConfigurations<HeaderInput> {

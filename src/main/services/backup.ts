@@ -64,6 +64,12 @@ export class BackupService {
 
   async create(input: CreateBackupInput): Promise<BackupSummary> {
     return this.withLock(async () => {
+      if (
+        input.reason === 'template' &&
+        (input.targetPath !== this.commonConfigs.getPath(input.toolId) ||
+          input.additionalFiles?.length)
+      )
+        throw new AppError('INVALID_INPUT', '共通模板备份只能包含应用中的共用模板。')
       if (input.additionalFiles?.some((file) => !this.isRelatedPath(input.toolId, file.path))) {
         throw new AppError('INVALID_INPUT', '备份仅支持工具配置、对应共通模板和接管状态。')
       }
@@ -152,9 +158,9 @@ export class BackupService {
 
   /** Older multi-file backups may include files the application no longer manages. */
   private getRestorableRecord(record: BackupRecord): BackupRecord {
-    const additionalFiles = (record.additionalFiles ?? []).filter((file) =>
-      this.isRelatedPath(record.toolId, file.path)
-    )
+    const additionalFiles = (record.additionalFiles ?? [])
+      .filter((file) => this.isRelatedPath(record.toolId, file.path))
+      .map((file) => ({ ...file, path: this.restoredPath(record.toolId, file.path) }))
     return { ...record, additionalFiles, relatedPaths: additionalFiles.map((file) => file.path) }
   }
 
@@ -163,16 +169,26 @@ export class BackupService {
     content: string | null,
     additionalContents: Record<string, string | null>
   ): BackupPayload {
+    const files = (record.additionalFiles ?? []).filter((file) =>
+      this.isRelatedPath(record.toolId, file.path)
+    )
+    const contents = Object.fromEntries(
+      files.map((file) => {
+        const original = additionalContents[file.path] ?? null
+        const path = this.restoredPath(record.toolId, file.path)
+        return [path, path === file.path ? original : this.commonConfigs.encode(original)]
+      })
+    )
     const restorable = this.getRestorableRecord(record)
+    restorable.additionalFiles = restorable.additionalFiles?.map((file) => ({
+      ...file,
+      checksum: hashContent(contents[file.path] ?? null),
+      originalFileExisted: contents[file.path] !== null
+    }))
     return {
       record: restorable,
       content,
-      additionalContents: Object.fromEntries(
-        (restorable.additionalFiles ?? []).map((file) => [
-          file.path,
-          additionalContents[file.path] ?? null
-        ])
-      )
+      additionalContents: contents
     }
   }
 
@@ -202,8 +218,16 @@ export class BackupService {
 
   private isRelatedPath(toolId: ToolId, path: string): boolean {
     return (
-      path === this.commonConfigs.getPath(toolId) || path === this.managedStates.getPath(toolId)
+      path === this.commonConfigs.getPath(toolId) ||
+      path === this.commonConfigs.getLegacyPath(toolId) ||
+      path === this.managedStates.getPath(toolId)
     )
+  }
+
+  private restoredPath(toolId: ToolId, path: string): string {
+    return path === this.commonConfigs.getLegacyPath(toolId)
+      ? this.commonConfigs.getPath(toolId)
+      : path
   }
 
   private getPayloadPath(record: Pick<BackupRecord, 'id' | 'toolId'>): string {
@@ -274,7 +298,10 @@ function isBackupRecord(value: unknown): value is BackupRecord {
     isAbsolute(value.targetPath) &&
     (isUuid(value.providerId) || value.providerId === null) &&
     (typeof value.providerName === 'string' || value.providerName === null) &&
-    (value.reason === 'apply' || value.reason === 'restore' || value.reason === 'common') &&
+    (value.reason === 'apply' ||
+      value.reason === 'restore' ||
+      value.reason === 'common' ||
+      value.reason === 'template') &&
     typeof value.originalFileExisted === 'boolean' &&
     (value.relatedPaths === undefined ||
       (Array.isArray(value.relatedPaths) &&

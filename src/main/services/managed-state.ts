@@ -75,6 +75,8 @@ export class ManagedStateStore {
         throw new Error('Invalid fields')
       if (value.attribution !== undefined && !isFieldValue(value.attribution))
         throw new Error('Invalid attribution')
+      if (value.common !== undefined && typeof value.common !== 'string')
+        throw new Error('Invalid applied common template')
       if (
         value.selection !== undefined &&
         (!isObject(value.selection) ||
