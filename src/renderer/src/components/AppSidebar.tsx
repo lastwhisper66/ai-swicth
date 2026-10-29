@@ -1,25 +1,16 @@
 import { TOOL_IDS, TOOL_NAMES } from '@shared/ipc'
-import { RefreshCw, Settings } from 'lucide-react'
+import { Settings } from 'lucide-react'
 import type { ToolId } from '@shared/ipc'
-import { ModeToggle } from '@renderer/components/ModeToggle'
 import { ToolIcon } from '@renderer/components/ToolIcon'
 import { Button } from '@renderer/components/ui/button'
 
 interface AppSidebarProps {
   view: ToolId | 'settings'
   busy: boolean
-  refreshing: boolean
   onViewChange: (view: ToolId | 'settings') => void
-  onRefresh: () => void
 }
 
-export function AppSidebar({
-  view,
-  busy,
-  refreshing,
-  onViewChange,
-  onRefresh
-}: AppSidebarProps): React.JSX.Element {
+export function AppSidebar({ view, busy, onViewChange }: AppSidebarProps): React.JSX.Element {
   return (
     <aside className="flex w-52 shrink-0 flex-col border-r bg-muted/25 lg:w-56">
       <nav className="flex-1 space-y-1 overflow-y-auto p-3" aria-label="工具页面">
@@ -39,18 +30,6 @@ export function AppSidebar({
         ))}
       </nav>
       <div className="space-y-1 border-t p-3">
-        <Button
-          type="button"
-          variant="ghost"
-          className="h-10 w-full justify-start gap-3 px-3"
-          disabled={busy}
-          onClick={onRefresh}
-          aria-label="刷新工具状态"
-        >
-          <RefreshCw className={refreshing ? 'animate-spin' : undefined} aria-hidden="true" />
-          {refreshing ? '正在刷新…' : '刷新工具状态'}
-        </Button>
-        <ModeToggle />
         <nav aria-label="应用设置">
           <Button
             type="button"

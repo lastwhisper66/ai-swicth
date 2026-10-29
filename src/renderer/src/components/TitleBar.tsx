@@ -1,11 +1,28 @@
 import { useEffect, useState } from 'react'
-import { Copy, Minus, Square, X } from 'lucide-react'
+import { Copy, Minus, RefreshCw, Square, X } from 'lucide-react'
 import { toast } from 'sonner'
 import type { ApiResult } from '@shared/ipc'
 import { AppIcon } from '@renderer/components/AppIcon'
+import { ModeToggle } from '@renderer/components/ModeToggle'
 import { Button } from '@renderer/components/ui/button'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from '@renderer/components/ui/tooltip'
 
-export function TitleBar(): React.JSX.Element {
+interface TitleBarProps {
+  busy?: boolean
+  refreshing?: boolean
+  onRefresh?: () => void
+}
+
+export function TitleBar({
+  busy = false,
+  refreshing = false,
+  onRefresh
+}: TitleBarProps): React.JSX.Element {
   const [isMaximized, setIsMaximized] = useState(false)
 
   useEffect(() => {
@@ -44,7 +61,34 @@ export function TitleBar(): React.JSX.Element {
         <AppIcon className="size-6" />
         <span className="truncate text-xs font-semibold tracking-wide">AI Switch</span>
       </div>
-      <div className="app-no-drag flex h-full shrink-0 items-stretch" aria-label="窗口控制">
+      <div className="app-no-drag flex h-full shrink-0 items-stretch" aria-label="应用与窗口控制">
+        <div className="flex items-center gap-1 border-r px-2">
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="text-muted-foreground active:translate-y-0"
+                  disabled={busy || !onRefresh}
+                  onClick={onRefresh}
+                  aria-label="刷新工具状态"
+                  aria-busy={refreshing}
+                >
+                  <RefreshCw
+                    className={refreshing ? 'animate-spin' : undefined}
+                    aria-hidden="true"
+                  />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={8}>
+                刷新工具状态
+              </TooltipContent>
+            </Tooltip>
+            <ModeToggle />
+          </TooltipProvider>
+        </div>
         <Button
           type="button"
           variant="ghost"

@@ -338,17 +338,19 @@ function App(): React.JSX.Element {
   return (
     <TooltipProvider>
       <div className="flex h-svh min-w-0 flex-col overflow-hidden">
-        <TitleBar />
+        <TitleBar
+          busy={pendingKey !== null}
+          refreshing={pendingKey === 'refresh'}
+          onRefresh={() => void refreshSnapshot()}
+        />
         <div className="flex min-h-0 flex-1">
           <AppSidebar
             view={view}
             busy={pendingKey !== null}
-            refreshing={pendingKey === 'refresh'}
             onViewChange={(nextView) => {
               if (nextView === 'settings') setSettingsSection('general')
               setView(nextView)
             }}
-            onRefresh={() => void refreshSnapshot()}
           />
           <main className="min-h-0 min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both">
             <div className="mx-auto w-full max-w-6xl px-5 py-6 lg:px-8 lg:py-8">
