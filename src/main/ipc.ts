@@ -1,3 +1,4 @@
+import { TOOL_NAMES } from '@shared/ipc'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, type IpcMainInvokeEvent } from 'electron'
 import {
   IPC_CHANNELS,
@@ -144,7 +145,7 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
       if (!window) throw new AppError('INVALID_INPUT', '无法识别应用窗口。')
       const defaultPath = await controller.getToolPickerDirectory(input)
       const result = await dialog.showOpenDialog(window, {
-        title: `选择 ${input.toolId === 'claude-code' ? 'Claude Code' : 'Codex'} 配置目录`,
+        title: `选择 ${TOOL_NAMES[input.toolId]} 配置目录`,
         defaultPath,
         properties: ['openDirectory']
       })

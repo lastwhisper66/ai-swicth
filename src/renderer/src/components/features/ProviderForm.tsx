@@ -1,3 +1,5 @@
+import { TOOL_NAMES } from '@shared/ipc'
+import { baseToolId } from '@shared/ipc'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, ArrowLeft, ChevronDown, Info, RefreshCw } from 'lucide-react'
 import type { AppSnapshot, ProviderSummary, ToolId } from '@shared/ipc'
@@ -46,7 +48,7 @@ export function ProviderForm({
   onPendingChange,
   onSaved
 }: ProviderFormProps): React.JSX.Element {
-  const toolName = toolId === 'claude-code' ? 'Claude Code' : 'Codex'
+  const toolName = TOOL_NAMES[toolId]
   const [form, setForm] = useState<ProviderFormState>(() => ({
     name: provider?.name ?? '',
     baseUrl: provider?.baseUrl ?? '',
@@ -59,7 +61,7 @@ export function ProviderForm({
           id,
           {
             ...structuredClone(config),
-            ...(id === 'claude-code' && {
+            ...(baseToolId(id as ToolId) === 'claude-code' && {
               models: config.models.map((model) => ({
                 ...structuredClone(model),
                 model: nativeModel('claude-code', model)
@@ -227,7 +229,7 @@ export function ProviderForm({
                   error={fieldErrors.baseUrl}
                   htmlFor="provider-url"
                   hint={
-                    toolId === 'claude-code'
+                    baseToolId(toolId) === 'claude-code'
                       ? '填写支持 Anthropic Messages 协议的服务地址。'
                       : '填写支持 OpenAI Responses 协议的服务地址。'
                   }

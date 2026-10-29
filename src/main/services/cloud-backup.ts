@@ -13,7 +13,7 @@ import type {
   CloudBackupSettings,
   CloudBackupSettingsInput
 } from '@shared/ipc'
-import { TOOL_IDS, type ToolId } from '@shared/ipc'
+import { TOOL_IDS, isWslTool, type ToolId } from '@shared/ipc'
 import { parseConfiguration, type ManagedState } from '@shared/configuration'
 import { AppError } from '../errors'
 import type { PortableProvider, ProviderStore } from '../providers/store'
@@ -21,13 +21,13 @@ import type { AppSettingsStore } from './app-settings'
 import type { CommonConfigStore } from './common-config'
 import type { ManagedStateStore } from './managed-state'
 
-const CLOUD_DOCUMENT_VERSION = 2
+const CLOUD_DOCUMENT_VERSION = 3
 const ENVELOPE_VERSION = 1
 const LEGACY_OBJECT_NAME = 'backup.v1.json.enc'
 const PASSWORD_MIN_LENGTH = 8
 
 interface CloudBackupDocument {
-  version: 1 | 2
+  version: 1 | 2 | 3
   createdAt: string
   providers: PortableProvider[]
   commonConfigs: Record<ToolId, string | null>
@@ -81,7 +81,7 @@ export class CloudBackupService {
         commonConfigs: await this.commonConfigs.exportPortable(),
         managedStates: await this.managedStates.exportPortable()
       }
-      const objectKey = `${getObjectPrefix(settings)}backups/${document.createdAt.replace(/[:.]/gu, '-')}-${randomUUID()}.v2.json.enc`
+      const objectKey = `${getObjectPrefix(settings)}backups/${document.createdAt.replace(/[:.]/gu, '-')}-${randomUUID()}.v${CLOUD_DOCUMENT_VERSION}.json.enc`
       await client.send(
         new PutObjectCommand({
           Bucket: settings.bucket,
@@ -164,9 +164,7 @@ export class CloudBackupService {
       try {
         await this.providerStore.importPortable(document.providers)
         await this.commonConfigs.importPortable(document.commonConfigs)
-        await this.managedStates.importPortable(
-          document.managedStates ?? { 'claude-code': null, codex: null }
-        )
+        await this.managedStates.importPortable(document.managedStates!)
       } catch (error) {
         try {
           await this.providerStore.importPortable(previousProviders)
@@ -369,7 +367,7 @@ function isBackupKey(key: string, prefix: string): boolean {
   const relativeKey = key.slice(prefix.length)
   return (
     relativeKey === LEGACY_OBJECT_NAME ||
-    (relativeKey.startsWith('backups/') && /\.v[12]\.json\.enc$/u.test(relativeKey))
+    (relativeKey.startsWith('backups/') && /\.v[123]\.json\.enc$/u.test(relativeKey))
   )
 }
 
@@ -455,6 +453,12 @@ function decryptDocument(encrypted: string, password: string): CloudBackupDocume
     ]).toString('utf8')
     const document: unknown = JSON.parse(plaintext)
     if (!isCloudBackupDocument(document)) throw new Error('Invalid backup document')
+    // Older documents predate WSL. Normalize missing entries before validation and import.
+    document.managedStates ??= {} as Record<ToolId, ManagedState | null>
+    for (const toolId of TOOL_IDS) {
+      document.commonConfigs[toolId] ??= null
+      document.managedStates[toolId] ??= null
+    }
     return document
   } catch {
     throw new AppError(
@@ -482,7 +486,7 @@ function isCloudBackupDocument(value: unknown): value is CloudBackupDocument {
   if (typeof value !== 'object' || value === null) return false
   const input = value as Record<string, unknown>
   if (
-    (input.version !== 1 && input.version !== CLOUD_DOCUMENT_VERSION) ||
+    ![1, 2, CLOUD_DOCUMENT_VERSION].includes(input.version as number) ||
     typeof input.createdAt !== 'string' ||
     !Array.isArray(input.providers) ||
     typeof input.commonConfigs !== 'object' ||
@@ -492,17 +496,22 @@ function isCloudBackupDocument(value: unknown): value is CloudBackupDocument {
     return false
   }
   if (
-    (input.version === 2 || input.managedStates !== undefined) &&
+    (input.version !== 1 || input.managedStates !== undefined) &&
     (typeof input.managedStates !== 'object' ||
       input.managedStates === null ||
       Array.isArray(input.managedStates) ||
-      !TOOL_IDS.every((toolId) => Object.hasOwn(input.managedStates as object, toolId)))
+      !TOOL_IDS.filter((toolId) => input.version === 3 || !isWslTool(toolId)).every((toolId) =>
+        Object.hasOwn(input.managedStates as object, toolId)
+      ))
   )
     return false
   const commonConfigs = input.commonConfigs as Record<string, unknown>
   if (
     !TOOL_IDS.every(
-      (toolId) => commonConfigs[toolId] === null || typeof commonConfigs[toolId] === 'string'
+      (toolId) =>
+        (input.version !== 3 && isWslTool(toolId) && !Object.hasOwn(commonConfigs, toolId)) ||
+        commonConfigs[toolId] === null ||
+        typeof commonConfigs[toolId] === 'string'
     )
   ) {
     return false

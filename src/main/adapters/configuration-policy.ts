@@ -1,3 +1,4 @@
+import { baseToolId } from '@shared/ipc'
 import {
   hasControlCharacters,
   COMMON_FIELDS,
@@ -9,7 +10,7 @@ import type { ToolId } from '@shared/ipc'
 import { AppError } from '../errors'
 
 export function validateCommonFields(toolId: ToolId, root: ConfigObject): void {
-  for (const field of COMMON_FIELDS[toolId]) {
+  for (const field of COMMON_FIELDS[baseToolId(toolId)]) {
     const entry = readField(root, field.path)
     if (!entry.exists) continue
     const value = entry.value
@@ -42,7 +43,7 @@ export function validateCommonFields(toolId: ToolId, root: ConfigObject): void {
         `${field.label}的值无效。请在表单中重新选择，或从高级原文中清除此字段以恢复默认。`
       )
   }
-  if (toolId === 'claude-code') {
+  if (baseToolId(toolId) === 'claude-code') {
     if (root.attribution !== undefined && root.attribution !== false && !isObject(root.attribution))
       throw new AppError('INVALID_INPUT', 'attribution 必须是对象或 false。')
     if (isObject(root.attribution)) {

@@ -6,6 +6,7 @@ import { WINDOW_STATE_CHANGED } from '@shared/ipc'
 import { registerAppIpc } from './ipc'
 import { ClaudeCodeAdapter } from './adapters/claude-code'
 import { CodexAdapter } from './adapters/codex'
+import { WslService } from './services/wsl'
 import { ProviderStore } from './providers/store'
 import { AppController } from './services/app-controller'
 import { BackupService } from './services/backup'
@@ -154,10 +155,11 @@ app.whenReady().then(async () => {
     dialog.showErrorBox('无法读取应用设置', toApiError(error).message)
   }
   const providerStore = new ProviderStore(join(userDataPath, 'providers.v1.json'))
-  const pathSettings = new PathSettingsStore(join(userDataPath, 'settings.v1.json'))
+  const wsl = new WslService()
+  const pathSettings = new PathSettingsStore(join(userDataPath, 'settings.v1.json'), wsl)
   const commonConfigs = new CommonConfigStore(userDataPath)
   const managedStates = new ManagedStateStore(userDataPath)
-  const installations = new ToolInstallationService()
+  const installations = new ToolInstallationService(wsl)
   const backupService = new BackupService(
     join(userDataPath, 'backups'),
     commonConfigs,
@@ -171,7 +173,9 @@ app.whenReady().then(async () => {
   )
   const adapters = {
     'claude-code': new ClaudeCodeAdapter(),
-    codex: new CodexAdapter()
+    codex: new CodexAdapter(),
+    'claude-code-wsl': new ClaudeCodeAdapter('claude-code-wsl'),
+    'codex-wsl': new CodexAdapter('codex-wsl')
   }
   const toolStatusService = new ToolStatusService(
     providerStore,

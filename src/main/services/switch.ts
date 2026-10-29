@@ -1,3 +1,4 @@
+import { baseToolId, isWslTool } from '@shared/ipc'
 import { unlink } from 'node:fs/promises'
 import { isDeepStrictEqual } from 'node:util'
 import type {
@@ -68,7 +69,7 @@ export class SwitchService {
         )
       }
 
-      const target = await this.pathSettings.get(toolId)
+      const target = await this.pathSettings.getAvailable(toolId)
       const adapter = this.adapters[toolId]
       const originalContent = await readTarget(target.path)
       const statePath = this.managedStates.getPath(toolId)
@@ -186,7 +187,7 @@ export class SwitchService {
       const state = stateForTarget(this.managedStates.decode(stateContent), target.path)
       captureAttribution(input.toolId, content, input.content, state)
       if (
-        input.toolId === 'claude-code' &&
+        baseToolId(input.toolId) === 'claude-code' &&
         attributionStatus(parseConfiguration(input.toolId, input.content)) !== 'hidden'
       )
         delete state.attribution
@@ -279,7 +280,7 @@ export class SwitchService {
       {
         path: target.path,
         content: previewContent,
-        language: input.toolId === 'codex' ? ('toml' as const) : ('json' as const)
+        language: baseToolId(input.toolId) === 'codex' ? ('toml' as const) : ('json' as const)
       }
     ]
     return {
@@ -366,7 +367,7 @@ export class SwitchService {
     template: string | null
     stateContent: string | null
   }> {
-    const target = await this.pathSettings.get(toolId)
+    const target = await this.pathSettings.getAvailable(toolId)
     const content = await readTarget(target.path)
     const template = await readTarget(this.commonConfigs.getPath(toolId))
     const stateContent = await readTarget(this.managedStates.getPath(toolId))
@@ -388,7 +389,12 @@ export class SwitchService {
     const backup = await this.backupService.create(input)
     await assertTargetsUnchanged(hashes)
     try {
-      await writeTargetSet(input.targetPath, generated.content, generated.relatedContents)
+      await writeTargetSet(
+        input.targetPath,
+        generated.content,
+        generated.relatedContents,
+        isWslTool(input.toolId)
+      )
       const written = await readTarget(input.targetPath)
       if (written === null) throw new Error('Target disappeared after write')
       verify(written, await readTargets(paths))
@@ -407,6 +413,7 @@ export class SwitchService {
   async restore(backupId: string): Promise<RestoreResult> {
     const payload = await this.backupService.read(backupId)
     const { record, content: restoredContent, additionalContents } = payload
+    await this.pathSettings.checkBackupTarget(record.toolId, record.targetPath)
     const restoredStatePath = this.managedStates.getPath(record.toolId)
     this.managedStates.decode(additionalContents[restoredStatePath] ?? null)
     const restoredTemplate = additionalContents[this.commonConfigs.getPath(record.toolId)]
@@ -444,7 +451,12 @@ export class SwitchService {
       await assertTargetsUnchanged(currentHashes)
 
       try {
-        await writeTargetSet(record.targetPath, restoredContent, additionalContents)
+        await writeTargetSet(
+          record.targetPath,
+          restoredContent,
+          additionalContents,
+          isWslTool(record.toolId)
+        )
         const writtenContent = await readTarget(record.targetPath)
         if (hashContent(writtenContent) !== record.checksum) {
           throw new Error('Restored checksum mismatch')
@@ -478,7 +490,9 @@ export class SwitchService {
         backupId,
         safetyBackupId: safetyBackup.id,
         message:
-          record.toolId === 'codex' && restoredConfiguration.model && !restoredConfiguration.apiKey
+          baseToolId(record.toolId) === 'codex' &&
+          restoredConfiguration.model &&
+          !restoredConfiguration.apiKey
             ? '已恢复 Codex 配置。这份备份未在 config.toml 中保存 API Key，请重新应用已保存的供应商，再新建或重启会话。'
             : `已恢复 ${adapter.displayName} 配置，请新建或重启会话。`,
         restartRequired: true
@@ -543,7 +557,8 @@ function captureAttribution(
   common: string | null,
   state: ManagedState
 ): void {
-  if (toolId !== 'claude-code' || common === null || state.attribution !== undefined) return
+  if (baseToolId(toolId) !== 'claude-code' || common === null || state.attribution !== undefined)
+    return
   if (attributionStatus(parseConfiguration(toolId, common)) === 'hidden')
     state.attribution = structuredClone(
       readField(parseConfiguration(toolId, original ?? '{}'), ['attribution'])
@@ -585,9 +600,9 @@ async function readTarget(filePath: string): Promise<string | null> {
   }
 }
 
-async function writeTarget(filePath: string, content: string): Promise<void> {
+async function writeTarget(filePath: string, content: string, createParent = false): Promise<void> {
   try {
-    await writeTextAtomic(filePath, content)
+    await writeTextAtomic(filePath, content, createParent)
   } catch (error) {
     throw mapWriteError(error)
   }
@@ -596,10 +611,11 @@ async function writeTarget(filePath: string, content: string): Promise<void> {
 async function writeTargetSet(
   targetPath: string,
   content: string | null,
-  relatedContents: Record<string, string | null> | undefined
+  relatedContents: Record<string, string | null> | undefined,
+  createParent = false
 ): Promise<void> {
   if (content === null) await restoreTarget(targetPath, null)
-  else await writeTarget(targetPath, content)
+  else await writeTarget(targetPath, content, createParent)
   for (const [filePath, relatedContent] of Object.entries(relatedContents ?? {})) {
     await restoreTarget(filePath, relatedContent)
   }

@@ -1,3 +1,4 @@
+import { baseToolId } from '@shared/ipc'
 import { useRef } from 'react'
 import type { ToolId } from '@shared/ipc'
 import {
@@ -14,7 +15,7 @@ import { Field, FieldDescription, FieldLabel } from '@renderer/components/ui/fie
 import { ConfigurationSelect } from './ConfigurationSelect'
 import { ConfigurationCheckbox } from './ConfigurationCheckbox'
 
-const formFields: Record<ToolId, ReadonlySet<string>> = {
+const formFields: Record<ReturnType<typeof baseToolId>, ReadonlySet<string>> = {
   'claude-code': new Set(['effortLevel']),
   codex: new Set(['model_reasoning_effort'])
 }
@@ -42,8 +43,8 @@ export function CommonOptionsForm({
   return (
     <div className="space-y-5">
       <div className="grid gap-5">
-        {COMMON_FIELDS[toolId]
-          .filter((field) => formFields[toolId].has(field.path.join('.')))
+        {COMMON_FIELDS[baseToolId(toolId)]
+          .filter((field) => formFields[baseToolId(toolId)].has(field.path.join('.')))
           .map((field) => {
             const entry = readField(root, field.path)
             const key = field.path.join('.')
@@ -119,7 +120,7 @@ export function CommonOptionsForm({
               />
             )
           })}
-        {toolId === 'claude-code' && (
+        {baseToolId(toolId) === 'claude-code' && (
           <ConfigurationCheckbox
             id="hide-ai-attribution"
             label="隐藏 AI 署名"

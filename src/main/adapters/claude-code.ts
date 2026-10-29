@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
+import { TOOL_NAMES } from '@shared/ipc'
 import {
   ROUTE_ENV,
   mergeTemplate,
@@ -20,8 +21,11 @@ import type {
 } from './types'
 
 export class ClaudeCodeAdapter implements ToolAdapter {
-  readonly toolId = 'claude-code' as const
-  readonly displayName = 'Claude Code'
+  constructor(readonly toolId: 'claude-code' | 'claude-code-wsl' = 'claude-code') {}
+
+  get displayName(): string {
+    return TOOL_NAMES[this.toolId]
+  }
 
   extractCommon(content: string | null): string {
     const root = parseJson(content)

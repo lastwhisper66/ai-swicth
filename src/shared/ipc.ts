@@ -37,9 +37,24 @@ export interface WindowState {
   isMaximized: boolean
 }
 
-export const TOOL_IDS = ['claude-code', 'codex'] as const
+export const TOOL_IDS = ['claude-code', 'codex', 'claude-code-wsl', 'codex-wsl'] as const
 
 export type ToolId = (typeof TOOL_IDS)[number]
+
+export const TOOL_NAMES: Record<ToolId, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  'claude-code-wsl': 'Claude Code WSL',
+  'codex-wsl': 'Codex WSL'
+}
+
+export function isWslTool(toolId: ToolId): boolean {
+  return toolId === 'claude-code-wsl' || toolId === 'codex-wsl'
+}
+
+export function baseToolId(toolId: ToolId): 'claude-code' | 'codex' {
+  return toolId === 'claude-code' || toolId === 'claude-code-wsl' ? 'claude-code' : 'codex'
+}
 
 export type ToolModels = Partial<Record<ToolId, string>>
 
@@ -307,6 +322,7 @@ export interface OpenToolLocationInput {
 
 export type ApiErrorCode =
   | 'INVALID_INPUT'
+  | 'WSL_UNAVAILABLE'
   | 'DUPLICATE_PROVIDER'
   | 'PROVIDER_NOT_FOUND'
   | 'PROVIDER_IN_USE'

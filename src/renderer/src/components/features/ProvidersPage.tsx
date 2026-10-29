@@ -1,3 +1,4 @@
+import { TOOL_NAMES } from '@shared/ipc'
 import { Plus } from 'lucide-react'
 import { TOOL_IDS, type ProviderSummary, type ToolId, type ToolStatus } from '@shared/ipc'
 import { ToolIcon } from '@renderer/components/ToolIcon'
@@ -39,7 +40,7 @@ export function ProvidersPage({
         <div>
           <h2 className="text-base font-semibold">供应商设置</h2>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            分别管理两个工具的供应商，API Key
+            分别管理本机和 WSL 的供应商，API Key
             保存在本机应用数据目录中；上传云端时会使用备份密码整体加密。
           </p>
         </div>
@@ -48,15 +49,18 @@ export function ProvidersPage({
       <Tabs
         value={toolId}
         onValueChange={(value) => {
-          if (value === 'claude-code' || value === 'codex') onToolChange(value)
+          if (TOOL_IDS.includes(value as ToolId)) onToolChange(value as ToolId)
         }}
         className="gap-5"
       >
-        <TabsList className="h-11 max-w-full" aria-label="供应商所属工具">
+        <TabsList
+          className="grid w-full grid-cols-2 group-data-[orientation=horizontal]/tabs:h-auto xl:inline-flex xl:w-auto"
+          aria-label="供应商所属工具"
+        >
           {TOOL_IDS.map((id) => (
-            <TabsTrigger key={id} value={id} disabled={busy} className="gap-2 px-4">
+            <TabsTrigger key={id} value={id} disabled={busy} className="h-9 gap-2 px-3">
               <ToolIcon toolId={id} />
-              {id === 'claude-code' ? 'Claude Code' : 'Codex'}
+              {TOOL_NAMES[id]}
               <span className="text-xs text-muted-foreground">
                 {providers.filter((provider) => provider.tools.includes(id)).length}
               </span>
@@ -64,7 +68,7 @@ export function ProvidersPage({
           ))}
         </TabsList>
         {TOOL_IDS.map((id) => {
-          const toolName = id === 'claude-code' ? 'Claude Code' : 'Codex'
+          const toolName = TOOL_NAMES[id]
           const toolProviders = providers.filter((provider) => provider.tools.includes(id))
           return (
             <TabsContent key={id} value={id} className="space-y-5">

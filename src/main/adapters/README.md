@@ -7,3 +7,5 @@
 字段写入不代表模型、账号或网关实际可用，不调用付费 API 探测。
 
 Claude 模型仅使用模型名及 `[1m]` 开关；思考强度归共通配置，只写顶层 `effortLevel`，不生成 `modelSettings` 条目。Codex 的主思考强度同样归共通配置，只写顶层 `model_reasoning_effort`；计划模式思考强度和其他模型选项仍由各预设管理。
+
+ClaudeCodeAdapter 和 CodexAdapter 分别接受本机或 WSL 的工具标识；字段格式与映射共用，路径由服务层解析。共享字段策略按基础工具选择，供应商、共通模板、接管状态和备份仍使用完整工具标识隔离。

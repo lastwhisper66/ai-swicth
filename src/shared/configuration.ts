@@ -1,3 +1,4 @@
+import { baseToolId } from '@shared/ipc'
 import { parse, stringify } from 'smol-toml'
 import type { ToolId } from './ipc'
 
@@ -126,13 +127,13 @@ export function setField(root: ConfigObject, path: ConfigPath, value: unknown): 
 }
 
 export function parseConfiguration(toolId: ToolId, content: string): ConfigObject {
-  const root: unknown = toolId === 'codex' ? parse(content) : JSON.parse(content)
+  const root: unknown = baseToolId(toolId) === 'codex' ? parse(content) : JSON.parse(content)
   if (!isObject(root)) throw new Error('配置根节点必须是对象。')
   return root
 }
 
 export function serializeConfiguration(toolId: ToolId, root: ConfigObject): string {
-  return toolId === 'codex' ? stringify(root) : `${JSON.stringify(root, null, 2)}\n`
+  return baseToolId(toolId) === 'codex' ? stringify(root) : `${JSON.stringify(root, null, 2)}\n`
 }
 
 export const CODEX_MODEL_ROOT = [
@@ -149,7 +150,7 @@ export function providerOptionPaths(toolId: ToolId, root: ConfigObject): ConfigP
   const add = (path: ConfigPath): void => {
     if (readField(root, path).exists) paths.push(path)
   }
-  if (toolId === 'codex') {
+  if (baseToolId(toolId) === 'codex') {
     CODEX_MODEL_ROOT.forEach((key) => {
       // Other context sizes and service tiers stay in the advanced editor.
       if (key === 'model_context_window' && root[key] !== 1000000) return
@@ -169,7 +170,7 @@ export function claudeBaseModel(model: string): string {
 }
 
 export function nativeModel(toolId: ToolId, preset: ModelPreset): string {
-  if (toolId !== 'claude-code') return preset.model
+  if (baseToolId(toolId) !== 'claude-code') return preset.model
   const model = claudeBaseModel(preset.model)
   return preset.options.context1m ? `${model}[1m]` : model
 }
@@ -208,7 +209,7 @@ export const DEFAULT_CHOICES = [
   ['true', '启用'],
   ['false', '禁用']
 ] as const
-export const COMMON_FIELDS: Record<ToolId, CommonField[]> = {
+export const COMMON_FIELDS: Record<ReturnType<typeof baseToolId>, CommonField[]> = {
   'claude-code': [
     {
       path: ['effortLevel'],

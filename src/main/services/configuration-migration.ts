@@ -1,3 +1,4 @@
+import { baseToolId } from '@shared/ipc'
 import { randomUUID } from 'node:crypto'
 import type { ToolId } from '@shared/ipc'
 import {
@@ -29,7 +30,7 @@ export function migrateConfiguration(
     assign(field.value)
     setField(root, path, undefined)
   }
-  if (toolId === 'codex') {
+  if (baseToolId(toolId) === 'codex') {
     if (root.model_context_window === 1000000)
       move(['model_context_window'], () => {
         options.context1m = true

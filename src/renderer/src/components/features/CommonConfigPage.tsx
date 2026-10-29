@@ -1,3 +1,5 @@
+import { TOOL_NAMES } from '@shared/ipc'
+import { baseToolId } from '@shared/ipc'
 import { useEffect, useState } from 'react'
 import { AlertCircle, Download, Save } from 'lucide-react'
 import {
@@ -47,6 +49,7 @@ export function CommonConfigPage({
   onSaved: (snapshot: AppSnapshot, message: string) => void
 }): React.JSX.Element {
   const [toolId, setToolId] = useState<ToolId>('claude-code')
+  const [openedTools, setOpenedTools] = useState<ToolId[]>(['claude-code'])
   return (
     <div className="space-y-5">
       <div>
@@ -58,18 +61,25 @@ export function CommonConfigPage({
       <Tabs
         value={toolId}
         onValueChange={(value) => {
-          if (value === 'claude-code' || value === 'codex') setToolId(value)
+          if (TOOL_IDS.includes(value as ToolId)) {
+            const id = value as ToolId
+            setToolId(id)
+            setOpenedTools((previous) => (previous.includes(id) ? previous : [...previous, id]))
+          }
         }}
       >
-        <TabsList className="h-11" aria-label="共通配置所属工具">
+        <TabsList
+          className="grid w-full grid-cols-2 group-data-[orientation=horizontal]/tabs:h-auto xl:inline-flex xl:w-auto"
+          aria-label="共通配置所属工具"
+        >
           {TOOL_IDS.map((id) => (
-            <TabsTrigger key={id} value={id} disabled={busy} className="gap-2 px-4">
+            <TabsTrigger key={id} value={id} disabled={busy} className="h-9 gap-2 px-3">
               <ToolIcon toolId={id} />
-              {id === 'codex' ? 'Codex' : 'Claude Code'}
+              {TOOL_NAMES[id]}
             </TabsTrigger>
           ))}
         </TabsList>
-        {TOOL_IDS.map((id) => (
+        {openedTools.map((id) => (
           <TabsContent key={id} value={id} forceMount className="mt-3 data-[state=inactive]:hidden">
             <CommonConfigEditor
               toolId={id}
@@ -106,7 +116,7 @@ function CommonConfigEditor({
   const [editorMode, setEditorMode] = useState('form')
   const [migrationProviderId, setMigrationProviderId] = useState('')
   const [migrationModelId, setMigrationModelId] = useState('')
-  const toolName = toolId === 'codex' ? 'Codex' : 'Claude Code'
+  const toolName = TOOL_NAMES[toolId]
   const dirty =
     configuration !== null &&
     (configuration.source === 'current' || content !== configuration.content)
@@ -217,7 +227,7 @@ function CommonConfigEditor({
       <CardContent className="space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex gap-2">
-            <Badge variant="secondary">{toolId === 'codex' ? 'TOML' : 'JSON'}</Badge>
+            <Badge variant="secondary">{baseToolId(toolId) === 'codex' ? 'TOML' : 'JSON'}</Badge>
             <Badge variant="outline">
               {configuration?.source === 'saved' ? '已保存模板' : '从当前文件提取'}
             </Badge>
@@ -386,7 +396,7 @@ function CommonConfigEditor({
                       id={`${toolId}-common-description`}
                       className="text-xs leading-6"
                     >
-                      {toolId === 'claude-code'
+                      {baseToolId(toolId) === 'claude-code'
                         ? '共通字段与表单共享同一草稿；保留未知字段，供应商连接、路由与模型选项请在供应商侧设置。'
                         : '可管理审批、沙箱、历史和 MCP 等字段；不能包含 model、model_provider、model_providers，供应商地址和 API Key 统一由 config.toml 中的供应商配置管理。'}
                       <span className="block">

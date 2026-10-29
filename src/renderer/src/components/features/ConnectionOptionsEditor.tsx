@@ -1,3 +1,4 @@
+import { baseToolId } from '@shared/ipc'
 import { Plus, Trash2 } from 'lucide-react'
 import type { ToolId } from '@shared/ipc'
 import {
@@ -131,7 +132,7 @@ export function ConnectionOptionsEditor({
           </div>
         )
       })}
-      {toolId === 'codex' ? (
+      {baseToolId(toolId) === 'codex' ? (
         <ConfigurationSelect
           label="Responses WebSocket 兼容能力"
           value={

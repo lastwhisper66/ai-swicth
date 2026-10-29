@@ -1,3 +1,4 @@
+import { TOOL_IDS, TOOL_NAMES } from '@shared/ipc'
 import { RefreshCw, Settings } from 'lucide-react'
 import type { ToolId } from '@shared/ipc'
 import { ModeToggle } from '@renderer/components/ModeToggle'
@@ -20,9 +21,9 @@ export function AppSidebar({
   onRefresh
 }: AppSidebarProps): React.JSX.Element {
   return (
-    <aside className="flex w-44 shrink-0 flex-col border-r bg-muted/25 lg:w-48">
+    <aside className="flex w-52 shrink-0 flex-col border-r bg-muted/25 lg:w-56">
       <nav className="flex-1 space-y-1 overflow-y-auto p-3" aria-label="工具页面">
-        {(['claude-code', 'codex'] as const).map((toolId) => (
+        {TOOL_IDS.map((toolId) => (
           <Button
             key={toolId}
             type="button"
@@ -33,7 +34,7 @@ export function AppSidebar({
             aria-current={view === toolId ? 'page' : undefined}
           >
             <ToolIcon toolId={toolId} />
-            {toolId === 'claude-code' ? 'Claude Code' : 'Codex'}
+            {TOOL_NAMES[toolId]}
           </Button>
         ))}
       </nav>

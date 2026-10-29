@@ -175,7 +175,7 @@ export class AppController {
 
   async openToolLocation(input: OpenToolLocationInput): Promise<void> {
     return this.withMutation(async () => {
-      const location = await this.pathSettings.get(input.toolId)
+      const location = await this.pathSettings.getAvailable(input.toolId)
       await openToolLocation(location, input.target)
     })
   }

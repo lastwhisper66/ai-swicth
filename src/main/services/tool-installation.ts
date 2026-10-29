@@ -1,3 +1,4 @@
+import { baseToolId, isWslTool } from '@shared/ipc'
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, realpath, stat } from 'node:fs/promises'
@@ -6,30 +7,37 @@ import { delimiter, isAbsolute, join } from 'node:path'
 import type { ToolId, ToolInstallation } from '@shared/ipc'
 import { isFileSystemError } from '../errors'
 import { findBundledCodexCli, getCodexCommandDirectories } from './codex-cli-location'
+import type { WslService } from './wsl'
+import { doctorArguments, parseToolDoctor, type CliCommandResult } from './tool-diagnostics'
 
 const CACHE_DURATION = 30_000
-const DETECTION_TIMEOUT = 8_000
+const DETECTION_TIMEOUT = 20_000
 
 export class ToolInstallationService {
   private readonly cache = new Map<
-    ToolId,
+    string,
     { expiresAt: number; result: Promise<ToolInstallation> }
   >()
 
-  get(toolId: ToolId, refresh = false): Promise<ToolInstallation> {
-    const cached = this.cache.get(toolId)
+  constructor(private readonly wsl: WslService) {}
+
+  get(toolId: ToolId, refresh = false, distribution?: string): Promise<ToolInstallation> {
+    const key = `${toolId}:${distribution ?? ''}`
+    const cached = this.cache.get(key)
     if (cached && (!refresh || cached.expiresAt === Infinity) && cached.expiresAt > Date.now()) {
       return cached.result
     }
-    const result = detectInstallation(toolId)
+    const result = isWslTool(toolId)
+      ? this.wsl.detectInstallation(toolId, distribution!)
+      : detectInstallation(toolId)
     const entry = { expiresAt: Infinity, result }
-    this.cache.set(toolId, entry)
+    this.cache.set(key, entry)
     void result.then(
       () => {
         entry.expiresAt = Date.now() + CACHE_DURATION
       },
       () => {
-        this.cache.delete(toolId)
+        this.cache.delete(key)
       }
     )
     return result
@@ -37,8 +45,8 @@ export class ToolInstallationService {
 }
 
 async function detectInstallation(toolId: ToolId): Promise<ToolInstallation> {
-  const name = toolId === 'claude-code' ? 'Claude Code' : 'Codex CLI'
-  const command = toolId === 'claude-code' ? 'claude' : 'codex'
+  const name = baseToolId(toolId) === 'claude-code' ? 'Claude Code' : 'Codex CLI'
+  const command = baseToolId(toolId) === 'claude-code' ? 'claude' : 'codex'
   const candidates = getSearchDirectories(toolId).flatMap((directory) =>
     (process.platform === 'win32' ? [`${command}.exe`, `${command}.cmd`] : [command]).map(
       (fileName) => join(directory, fileName)
@@ -78,17 +86,18 @@ async function detectInstallation(toolId: ToolId): Promise<ToolInstallation> {
       const remaining = deadline - Date.now()
       if (remaining <= 0) break
       try {
-        const output = await readVersion(executable.path, Math.min(4_000, remaining))
-        const version =
-          toolId === 'claude-code'
-            ? output.match(/^\s*(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)\s+\(Claude Code\)/im)?.[1]
-            : output.match(/^\s*codex(?:-cli)?\s+(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)/im)?.[1]
-        if (!version) continue
+        const result = await runDoctor(
+          executable.path,
+          doctorArguments(toolId),
+          Math.min(12_000, remaining)
+        )
+        const diagnosis = parseToolDoctor(toolId, result.stdout)
+        if (!diagnosis) continue
         return {
           state: 'installed',
-          version,
+          ...diagnosis,
           executablePath: executable.path,
-          message: `${name} 可运行，版本 ${version}${bundled ? '（桌面版内置）' : ''}。`
+          message: `${name} 已安装，版本 ${diagnosis.version}${bundled ? '（桌面版内置）' : ''}。`
         }
       } catch {
         // A stale launcher must not prevent checking another installation.
@@ -100,7 +109,7 @@ async function detectInstallation(toolId: ToolId): Promise<ToolInstallation> {
   const installation = await inspectExecutables(candidates)
   if (installation) return installation
 
-  if (toolId === 'codex' && process.platform === 'win32') {
+  if (baseToolId(toolId) === 'codex' && process.platform === 'win32') {
     try {
       const bundled = await inspectExecutables(await findBundledCodexCli(), true)
       if (bundled) return bundled
@@ -114,9 +123,9 @@ async function detectInstallation(toolId: ToolId): Promise<ToolInstallation> {
     version: null,
     executablePath: firstExecutablePath,
     message: firstExecutablePath
-      ? `找到 ${name} 启动文件，但无法确认版本。请在终端运行 ${command} --version，修复安装后重新检测。`
+      ? `找到 ${name} 启动文件，但 doctor 未返回可识别的安装报告。请在终端运行 ${command} doctor，确认版本支持该命令并检查诊断结果后刷新。`
       : inaccessible
-        ? `部分安装位置无法访问，暂时无法确认 ${name} 是否可用。请检查权限，并在终端运行 ${command} --version。`
+        ? `部分安装位置无法访问，暂时无法确认 ${name} 是否可用。请检查权限，并在终端运行 ${command} doctor。`
         : `未在本机 PATH 和常见安装位置检测到 ${name}。请先安装；已安装时请检查 PATH，并重启 AI Switch 后重新检测。`
   }
 }
@@ -129,7 +138,7 @@ function getSearchDirectories(toolId: ToolId): string[] {
     join(userHome, '.bun', 'bin'),
     join(userHome, '.npm-global', 'bin')
   ]
-  if (toolId === 'codex') directories.push(...getCodexCommandDirectories())
+  if (baseToolId(toolId) === 'codex') directories.push(...getCodexCommandDirectories())
   if (process.platform === 'win32') {
     if (process.env.APPDATA) directories.push(join(process.env.APPDATA, 'npm'))
     if (process.env.LOCALAPPDATA) {
@@ -152,7 +161,11 @@ function getSearchDirectories(toolId: ToolId): string[] {
   ]
 }
 
-function readVersion(executablePath: string, timeout: number): Promise<string> {
+function runDoctor(
+  executablePath: string,
+  commandArgs: string[],
+  timeout: number
+): Promise<CliCommandResult> {
   const isBatch = process.platform === 'win32' && executablePath.endsWith('.cmd')
   // cmd.exe expands these characters even inside quotes; never interpolate them.
   if (isBatch && /["%!\r\n]/.test(executablePath)) {
@@ -161,7 +174,9 @@ function readVersion(executablePath: string, timeout: number): Promise<string> {
   const file = isBatch
     ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe')
     : executablePath
-  const args = isBatch ? ['/d', '/s', '/c', `""${executablePath}" --version"`] : ['--version']
+  const args = isBatch
+    ? ['/d', '/s', '/c', `""${executablePath}" ${commandArgs.join(' ')}"`]
+    : commandArgs
   return new Promise((resolve, reject) => {
     execFile(
       file,
@@ -170,12 +185,13 @@ function readVersion(executablePath: string, timeout: number): Promise<string> {
         timeout,
         windowsHide: true,
         windowsVerbatimArguments: isBatch,
-        maxBuffer: 64 * 1024,
+        maxBuffer: 512 * 1024,
+        cwd: homedir(),
         encoding: 'utf8'
       },
       (error, stdout) => {
-        if (error) reject(error)
-        else resolve(stdout)
+        if (error && typeof error.code !== 'number') reject(error)
+        else resolve({ stdout, exitCode: typeof error?.code === 'number' ? error.code : 0 })
       }
     )
   })

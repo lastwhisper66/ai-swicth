@@ -1,3 +1,4 @@
+import { baseToolId } from '@shared/ipc'
 import { createModelPreset } from '@renderer/lib/provider-form'
 import { Plus, Star, Trash2 } from 'lucide-react'
 import type { ToolId } from '@shared/ipc'
@@ -29,7 +30,7 @@ export function ModelPresetEditor({
   configuration: ProviderToolConfiguration<HeaderInput>
   onChange: (value: ProviderToolConfiguration<HeaderInput>) => void
 }): React.JSX.Element {
-  const isClaude = toolId === 'claude-code'
+  const isClaude = baseToolId(toolId) === 'claude-code'
   const changeModel = (id: string, changes: Partial<ModelPreset>): void =>
     onChange({
       ...configuration,

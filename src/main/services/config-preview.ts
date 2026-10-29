@@ -1,3 +1,4 @@
+import { baseToolId } from '@shared/ipc'
 import { parse, stringify } from 'smol-toml'
 import type { ToolId } from '@shared/ipc'
 import { AppError } from '../errors'
@@ -31,7 +32,7 @@ export function redactConfiguration(
   } catch {
     throw new AppError(
       'MALFORMED_CONFIG',
-      `${toolId === 'codex' ? 'Codex' : 'Claude Code'} 配置格式损坏，请修复后再预览。`
+      `${baseToolId(toolId) === 'codex' ? 'Codex' : 'Claude Code'} 配置格式损坏，请修复后再预览。`
     )
   }
 }

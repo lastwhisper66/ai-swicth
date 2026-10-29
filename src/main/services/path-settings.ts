@@ -1,3 +1,4 @@
+import { baseToolId, isWslTool } from '@shared/ipc'
 import { homedir } from 'node:os'
 import { stat } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
@@ -5,6 +6,7 @@ import type { ToolId, ToolPathSource } from '@shared/ipc'
 import { TOOL_IDS } from '@shared/ipc'
 import { AppError } from '../errors'
 import { readOptionalText, writeTextAtomic } from '../utils/files'
+import { parseWslPath, WslService } from './wsl'
 
 const SETTINGS_VERSION = 2
 
@@ -17,14 +19,44 @@ export interface ResolvedToolPath {
   path: string
   directory: string
   source: ToolPathSource
+  distribution?: string
+  unavailableReason?: string
 }
 
 export class PathSettingsStore {
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    private readonly wsl: WslService
+  ) {}
+
+  refresh(): void {
+    this.wsl.refresh()
+  }
 
   async get(toolId: ToolId): Promise<ResolvedToolPath> {
     const document = await this.load()
     const customPath = document.paths[toolId]
+    if (isWslTool(toolId)) {
+      try {
+        const location = await this.wsl.getLocation(toolId, customPath)
+        return {
+          ...resolveToolPath(
+            toolId,
+            location.directory,
+            customPath ? 'custom' : location.environmentOverride ? 'environment' : 'default'
+          ),
+          distribution: location.distribution
+        }
+      } catch (error) {
+        if (!(error instanceof AppError) || error.code !== 'WSL_UNAVAILABLE') throw error
+        return {
+          ...(customPath
+            ? resolveToolPath(toolId, customPath, 'custom')
+            : { path: '', directory: '', source: 'default' as const }),
+          unavailableReason: error.message
+        }
+      }
+    }
     if (customPath) return resolveToolPath(toolId, customPath, 'custom')
 
     const environmentPath = getEnvironmentPath(toolId)
@@ -34,7 +66,9 @@ export class PathSettingsStore {
   }
 
   async getPickerDirectory(toolId: ToolId): Promise<string> {
-    let { directory } = await this.get(toolId)
+    const location = await this.get(toolId)
+    if (isWslTool(toolId) && location.unavailableReason) return '\\\\wsl.localhost\\'
+    let { directory } = location
     while (true) {
       try {
         if ((await stat(directory)).isDirectory()) return directory
@@ -55,7 +89,10 @@ export class PathSettingsStore {
   }
 
   async set(toolId: ToolId, directory: string): Promise<void> {
-    const normalizedPath = validateToolPath(directory)
+    const normalizedPath = isWslTool(toolId)
+      ? parseWslPath(directory).directory
+      : validateToolPath(directory)
+    if (isWslTool(toolId)) await this.wsl.getLocation(toolId, normalizedPath)
     try {
       if (!(await stat(normalizedPath)).isDirectory()) {
         throw new AppError('INVALID_INPUT', '请选择工具的配置目录，而不是配置文件。')
@@ -69,6 +106,18 @@ export class PathSettingsStore {
     const document = await this.load()
     document.paths[toolId] = normalizedPath
     await this.save(document)
+  }
+
+  async getAvailable(toolId: ToolId): Promise<ResolvedToolPath> {
+    const location = await this.get(toolId)
+    if (location.unavailableReason) {
+      throw new AppError('WSL_UNAVAILABLE', location.unavailableReason)
+    }
+    return location
+  }
+
+  async checkBackupTarget(toolId: ToolId, targetPath: string): Promise<void> {
+    if (isWslTool(toolId)) await this.wsl.getLocation(toolId, dirname(targetPath))
   }
 
   async reset(toolId: ToolId): Promise<void> {
@@ -117,13 +166,15 @@ export function validateToolPath(directory: string): string {
 
 function getEnvironmentPath(toolId: ToolId): string | null {
   const directory =
-    toolId === 'claude-code' ? process.env.CLAUDE_CONFIG_DIR : process.env.CODEX_HOME
+    baseToolId(toolId) === 'claude-code' ? process.env.CLAUDE_CONFIG_DIR : process.env.CODEX_HOME
   if (!directory?.trim()) return null
   return resolve(directory)
 }
 
 function getDefaultPath(toolId: ToolId): string {
-  return toolId === 'claude-code' ? join(homedir(), '.claude') : join(homedir(), '.codex')
+  return baseToolId(toolId) === 'claude-code'
+    ? join(homedir(), '.claude')
+    : join(homedir(), '.codex')
 }
 
 function resolveToolPath(
@@ -133,7 +184,7 @@ function resolveToolPath(
 ): ResolvedToolPath {
   return {
     directory,
-    path: join(directory, toolId === 'claude-code' ? 'settings.json' : 'config.toml'),
+    path: join(directory, baseToolId(toolId) === 'claude-code' ? 'settings.json' : 'config.toml'),
     source
   }
 }
@@ -155,7 +206,7 @@ function isPathSettingsDocument(value: unknown): value is PathSettingsDocument {
     ) {
       return false
     }
-    const expectedExtension = toolId === 'claude-code' ? '.json' : '.toml'
+    const expectedExtension = baseToolId(toolId as ToolId) === 'claude-code' ? '.json' : '.toml'
     return (
       value.version === SETTINGS_VERSION ||
       extname(filePath).toLocaleLowerCase() === expectedExtension

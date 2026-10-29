@@ -1,4 +1,5 @@
 import { stringify } from 'smol-toml'
+import { TOOL_NAMES } from '@shared/ipc'
 import {
   CODEX_MODEL_ROOT,
   codexEfforts,
@@ -23,8 +24,11 @@ import type {
 } from './types'
 
 export class CodexAdapter implements ToolAdapter {
-  readonly toolId = 'codex' as const
-  readonly displayName = 'Codex'
+  constructor(readonly toolId: 'codex' | 'codex-wsl' = 'codex') {}
+
+  get displayName(): string {
+    return TOOL_NAMES[this.toolId]
+  }
 
   extractCommon(content: string | null): string {
     const root = validateCodexToml(content ?? '')

@@ -1,3 +1,4 @@
+import { baseToolId } from '@shared/ipc'
 import { Info, Plus } from 'lucide-react'
 import type { ProviderSummary, ToolId, ToolStatus } from '@shared/ipc'
 import { ToolIcon } from '@renderer/components/ToolIcon'
@@ -36,6 +37,14 @@ const toolDetails = {
   codex: {
     name: 'Codex',
     description: '管理 Codex 使用的供应商与模型。'
+  },
+  'claude-code-wsl': {
+    name: 'Claude Code WSL',
+    description: '管理 WSL 中 Claude Code 使用的供应商与模型。配置独立于 Windows 本机。'
+  },
+  'codex-wsl': {
+    name: 'Codex WSL',
+    description: '管理 WSL 中 Codex 使用的供应商与模型。配置独立于 Windows 本机。'
   }
 } as const
 
@@ -84,7 +93,7 @@ export function ToolConfigPage({
           <InfoItem
             label="当前模型"
             value={
-              toolId !== 'claude-code' &&
+              baseToolId(toolId) !== 'claude-code' &&
               status.currentModelName &&
               status.currentModelName !== status.model
                 ? `${status.currentModelName} (${status.model})`

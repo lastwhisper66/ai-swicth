@@ -223,7 +223,7 @@ function validateBasic(
   if (
     !Array.isArray(tools) ||
     tools.length < 1 ||
-    tools.length > 2 ||
+    tools.length > TOOL_IDS.length ||
     new Set(tools).size !== tools.length ||
     !tools.every((id) => TOOL_IDS.includes(id))
   )

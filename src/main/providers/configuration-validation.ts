@@ -1,3 +1,4 @@
+import { baseToolId } from '@shared/ipc'
 import type { ToolId } from '@shared/ipc'
 import {
   hasControlCharacters,
@@ -40,7 +41,7 @@ export function validateModelOptions(value: unknown, toolId: ToolId): ModelOptio
   if (!isObject(value)) fail('模型选项必须为对象。')
   exactKeys(
     value,
-    toolId === 'codex'
+    baseToolId(toolId) === 'codex'
       ? ['context1m', 'fast', 'planEffort', 'reasoningSummary', 'verbosity']
       : ['context1m', 'fast', 'autoCompact']
   )
@@ -58,7 +59,7 @@ export function validateModelOptions(value: unknown, toolId: ToolId): ModelOptio
     fail('思考摘要模式无效。')
   if (value.verbosity !== undefined && !VERBOSITIES.includes(value.verbosity as never))
     fail('回复详细程度无效。')
-  if (toolId === 'claude-code') return value.context1m ? { context1m: true } : {}
+  if (baseToolId(toolId) === 'claude-code') return value.context1m ? { context1m: true } : {}
   return structuredClone(value) as ModelOptions
 }
 
@@ -76,7 +77,7 @@ export function validateConfigurations(
     if (!isObject(config)) fail('每个适用工具都需要一份模型配置。')
     exactKeys(
       config,
-      toolId === 'codex'
+      baseToolId(toolId) === 'codex'
         ? ['models', 'defaultModelId', 'headers', 'supportsWebsockets']
         : ['models', 'defaultModelId', 'headers', 'routes']
     )
@@ -85,7 +86,7 @@ export function validateConfigurations(
     const models: ModelPreset[] = config.models.map((model) => {
       if (!isObject(model)) fail('模型记录格式无效。')
       exactKeys(model, ['id', 'name', 'model', 'options'])
-      const isClaude = toolId === 'claude-code'
+      const isClaude = baseToolId(toolId) === 'claude-code'
       const apiModel = text(model.model, isClaude ? 204 : 200, 'API 模型 ID')
       const options = validateModelOptions(model.options, toolId)
       const modelId = isClaude ? claudeBaseModel(apiModel) : apiModel
@@ -158,11 +159,11 @@ export function validateConfigurations(
     })
     const next = { models, defaultModelId, headers }
     result[toolId] = next
-    if (toolId === 'codex' && config.supportsWebsockets !== undefined) {
+    if (baseToolId(toolId) === 'codex' && config.supportsWebsockets !== undefined) {
       if (typeof config.supportsWebsockets !== 'boolean') fail('WebSocket 兼容能力必须为布尔值。')
       result[toolId]!.supportsWebsockets = config.supportsWebsockets
     }
-    if (toolId === 'claude-code' && config.routes !== undefined) {
+    if (baseToolId(toolId) === 'claude-code' && config.routes !== undefined) {
       if (!isObject(config.routes)) fail('模型路由格式无效。')
       exactKeys(config.routes, ROUTE_KEYS)
       result[toolId]!.routes = Object.fromEntries(

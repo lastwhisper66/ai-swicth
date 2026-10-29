@@ -1,4 +1,5 @@
 import { FileText, FolderInput, FolderOpen, HardDrive, RotateCcw, Undo2 } from 'lucide-react'
+import { TOOL_IDS, TOOL_NAMES as toolNames, isWslTool } from '@shared/ipc'
 import type {
   BackupSummary,
   CloudBackupSettings,
@@ -60,11 +61,6 @@ interface SettingsBackupsProps {
   onRestoreCloudBackup: (password: string) => void
 }
 
-const toolNames: Record<ToolId, string> = {
-  'claude-code': 'Claude Code',
-  codex: 'Codex'
-}
-
 export function SettingsBackups({
   section,
   tools,
@@ -93,7 +89,7 @@ export function SettingsBackups({
             </p>
           </div>
           <ItemGroup className="gap-0 divide-y overflow-hidden rounded-xl border bg-card">
-            {(['claude-code', 'codex'] as const).map((toolId) => (
+            {TOOL_IDS.map((toolId) => (
               <ToolPathEditor
                 key={`${toolId}:${tools[toolId].directory}`}
                 toolId={toolId}
@@ -177,9 +173,11 @@ function ToolPathEditor({
   onOpenLocation: (input: OpenToolLocationInput) => void
 }): React.JSX.Element {
   const showLocation =
-    status.installation.state === 'installed' ||
-    status.fileState !== 'missing' ||
-    status.pathSource !== 'default'
+    Boolean(status.directory) &&
+    (isWslTool(toolId) ||
+      status.installation.state === 'installed' ||
+      status.fileState !== 'missing' ||
+      status.pathSource !== 'default')
 
   return (
     <Item role="listitem" className="grid min-w-0 gap-4 rounded-none border-0 p-4">
@@ -199,6 +197,12 @@ function ToolPathEditor({
         </Badge>
       </ItemHeader>
       <ToolInstallationStatus installation={status.installation} showPath />
+      {isWslTool(toolId) && (
+        <p className="text-xs leading-5 text-muted-foreground">
+          自动读取默认 WSL 发行版当前用户的配置。更换发行版时，点击“更换目录”，选择该发行版内的
+          .claude 或 .codex 目录，可在目录选择器中输入 \\wsl.localhost 浏览所有发行版。
+        </p>
+      )}
       {showLocation ? (
         <div className="grid min-w-0 gap-4 rounded-lg bg-muted/35 p-3">
           <ConfigLocation

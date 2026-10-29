@@ -1,3 +1,4 @@
+import { baseToolId, isWslTool } from '@shared/ipc'
 import type { ToolId, ToolStatus } from '@shared/ipc'
 import { TOOL_IDS } from '@shared/ipc'
 import { nativeModel, type ModelPreset } from '@shared/configuration'
@@ -20,24 +21,51 @@ export class ToolStatusService {
   ) {}
 
   async getAll(refreshInstallations = false): Promise<Record<ToolId, ToolStatus>> {
-    const [claudeCode, codex] = await Promise.all([
-      this.get('claude-code', refreshInstallations),
-      this.get('codex', refreshInstallations)
-    ])
-    return { 'claude-code': claudeCode, codex }
+    if (refreshInstallations) this.pathSettings.refresh()
+    return Object.fromEntries(
+      await Promise.all(TOOL_IDS.map(async (id) => [id, await this.get(id, refreshInstallations)]))
+    ) as Record<ToolId, ToolStatus>
   }
 
   async get(toolId: ToolId, refreshInstallations = false): Promise<ToolStatus> {
-    const [resolvedPath, installation] = await Promise.all([
-      this.pathSettings.get(toolId),
-      this.installations.get(toolId, refreshInstallations)
-    ])
+    const resolvedPath = await this.pathSettings.get(toolId)
+    if (resolvedPath.unavailableReason) {
+      return {
+        toolId,
+        installation: {
+          state: 'unavailable',
+          version: null,
+          executablePath: null,
+          message: resolvedPath.unavailableReason
+        },
+        path: resolvedPath.path,
+        directory: resolvedPath.directory,
+        pathSource: resolvedPath.source,
+        fileState: 'unreadable',
+        statusMessage: resolvedPath.unavailableReason,
+        currentProviderId: null,
+        currentProviderName: null,
+        currentModelId: null,
+        currentModelName: null,
+        isExternalConfig: false,
+        baseUrl: null,
+        model: null
+      }
+    }
+    const installation = await this.installations.get(
+      toolId,
+      refreshInstallations,
+      resolvedPath.distribution
+    )
     let content: string | null
 
     try {
       content = await readOptionalText(resolvedPath.path)
     } catch (error) {
-      if (isFileSystemError(error) && (error.code === 'EACCES' || error.code === 'EPERM')) {
+      if (
+        isFileSystemError(error) &&
+        (isWslTool(toolId) || error.code === 'EACCES' || error.code === 'EPERM')
+      ) {
         return {
           toolId,
           installation,
@@ -45,7 +73,9 @@ export class ToolStatusService {
           directory: resolvedPath.directory,
           pathSource: resolvedPath.source,
           fileState: 'unreadable',
-          statusMessage: '没有权限读取配置文件，请检查文件权限。',
+          statusMessage: isWslTool(toolId)
+            ? '无法读取 WSL 配置文件，请确认发行版可运行、配置路径有效且当前用户具有文件访问权限，然后刷新。'
+            : '没有权限读取配置文件，请检查文件权限。',
           currentProviderId: null,
           currentProviderName: null,
           currentModelId: null,
@@ -146,7 +176,7 @@ export class ToolStatusService {
             ? `当前使用 ${matchedProvider.name} / ${selected?.preset.name}。已写入配置，服务能力未探测。`
             : matches.length > 1
               ? '当前文件匹配多个相同选项的预设，请应用其中一个以确认当前预设。'
-              : toolId === 'codex' && current.model && !current.apiKey
+              : baseToolId(toolId) === 'codex' && current.model && !current.apiKey
                 ? 'config.toml 中尚未保存 API Key，请选择已保存的供应商并重新应用。'
                 : hasConfiguration
                   ? '当前配置不匹配任何已保存供应商。'
