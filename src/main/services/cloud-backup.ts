@@ -3,39 +3,40 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client
 } from '@aws-sdk/client-s3'
+import type { HeadObjectCommandOutput } from '@aws-sdk/client-s3'
 import type {
   CloudBackupConnectionResult,
   CloudBackupOperationResult,
   CloudBackupSettings,
-  CloudBackupSettingsInput
+  CloudBackupSettingsInput,
+  CloudBackupSummary,
+  ConfigurationBackupSummary,
+  ProviderToolId,
+  ToolId
 } from '@shared/ipc'
-import { PROVIDER_TOOL_IDS, TOOL_IDS, isWslTool, type ToolId } from '@shared/ipc'
-import { parseConfiguration, type ManagedState } from '@shared/configuration'
+import { PROVIDER_TOOL_IDS } from '@shared/ipc'
+import { isObject } from '@shared/configuration'
 import { AppError } from '../errors'
 import type { PortableProvider, ProviderStore } from '../providers/store'
+import type { AppDatabase } from '../database'
 import type { AppSettingsStore } from './app-settings'
 import type { CommonConfigStore } from './common-config'
-import type { ManagedStateStore } from './managed-state'
+import type { ConfigurationArchiveStore } from './configuration-archives'
 
-const CLOUD_DOCUMENT_VERSION = 3
-const ENVELOPE_VERSION = 1
+const CURRENT_OBJECT_NAME = 'backup.json.enc'
 const LEGACY_OBJECT_NAME = 'backup.v1.json.enc'
-const PASSWORD_MIN_LENGTH = 8
 
 interface CloudBackupDocument {
-  version: 1 | 2 | 3
   createdAt: string
   providers: PortableProvider[]
-  commonConfigs: Record<ToolId, string | null>
-  managedStates?: Record<ToolId, ManagedState | null>
+  commonConfigs: Record<ProviderToolId, string | null>
 }
-
 interface EncryptedEnvelope {
-  version: typeof ENVELOPE_VERSION
   algorithm: 'aes-256-gcm'
   kdf: 'scrypt'
   salt: string
@@ -43,7 +44,6 @@ interface EncryptedEnvelope {
   tag: string
   ciphertext: string
 }
-
 interface CloudBackupObject {
   key: string
   lastModified: number
@@ -54,7 +54,8 @@ export class CloudBackupService {
     private readonly providerStore: ProviderStore,
     private readonly commonConfigs: CommonConfigStore,
     private readonly appSettings: AppSettingsStore,
-    private readonly managedStates: ManagedStateStore
+    private readonly archives: ConfigurationArchiveStore,
+    private readonly database: AppDatabase
   ) {}
 
   async testConnection(input: CloudBackupSettingsInput): Promise<CloudBackupConnectionResult> {
@@ -62,9 +63,40 @@ export class CloudBackupService {
     try {
       await client.send(new HeadBucketCommand({ Bucket: settings.bucket }))
       await this.listBackups(client, settings)
-      return { message: 'S3 兼容存储连接成功。' }
+      return { message: 'S3 兼容存储连接成功，绑定不会自动上传或应用存档。' }
     } catch (error) {
       throw this.mapCloudError(error, '无法连接 S3 兼容存储，请检查地址、存储桶和凭据。')
+    } finally {
+      client.destroy()
+    }
+  }
+
+  async list(): Promise<CloudBackupSummary[]> {
+    const { client, settings } = this.getClient()
+    try {
+      const current = await this.readCurrentMetadata(client, settings)
+      const objects = (await this.listBackups(client, settings)).sort(compareBackups).reverse()
+      const currentKey = `${getObjectPrefix(settings)}${CURRENT_OBJECT_NAME}`
+      const result = objects
+        .filter(
+          (item) => item.key !== currentKey && item.key !== current?.Metadata?.['archive-key']
+        )
+        .map((item, index) => ({
+          objectKey: item.key,
+          createdAt: new Date(item.lastModified).toISOString(),
+          current: !current && index === 0
+        }))
+      if (current)
+        result.unshift({
+          objectKey: objects.some((item) => item.key === current.Metadata?.['archive-key'])
+            ? current.Metadata!['archive-key']
+            : currentKey,
+          createdAt: (current.LastModified ?? new Date()).toISOString(),
+          current: true
+        })
+      return result
+    } catch (error) {
+      throw this.mapCloudError(error, '云端存档列表读取失败，请检查网络后重试。')
     } finally {
       client.destroy()
     }
@@ -74,128 +106,219 @@ export class CloudBackupService {
     assertEncryptionPassword(encryptionPassword)
     const { client, settings } = this.getClient()
     try {
+      const snapshot = this.database.readTransaction(() => ({
+        common: this.commonConfigs.exportPortableSync(),
+        providers: this.providerStore.exportPortableSync()
+      }))
+      const common = snapshot.common
       const document: CloudBackupDocument = {
-        version: CLOUD_DOCUMENT_VERSION,
         createdAt: new Date().toISOString(),
-        providers: await this.providerStore.exportPortable(),
-        commonConfigs: await this.commonConfigs.exportPortable(),
-        managedStates: await this.managedStates.exportPortable()
+        providers: snapshot.providers,
+        commonConfigs: Object.fromEntries(
+          PROVIDER_TOOL_IDS.map((id) => [id, common[id]])
+        ) as CloudBackupDocument['commonConfigs']
       }
-      const objectKey = `${getObjectPrefix(settings)}backups/${document.createdAt.replace(/[:.]/gu, '-')}-${randomUUID()}.v${CLOUD_DOCUMENT_VERSION}.json.enc`
-      await client.send(
-        new PutObjectCommand({
-          Bucket: settings.bucket,
-          Key: objectKey,
-          Body: encryptDocument(document, encryptionPassword),
-          ContentType: 'application/octet-stream',
-          Metadata: { 'ai-switch-version': String(CLOUD_DOCUMENT_VERSION) }
-        })
-      )
+      this.validateDocument(document)
+      const body = encryptDocument(document, encryptionPassword)
+      const objectKey = `${getObjectPrefix(settings)}${CURRENT_OBJECT_NAME}`
+      const archiveKey = `${getObjectPrefix(settings)}backups/${document.createdAt.replace(/[:.]/gu, '-')}-${randomUUID()}.json.enc`
+      try {
+        await client.send(
+          new PutObjectCommand({
+            Bucket: settings.bucket,
+            Key: objectKey,
+            Body: body,
+            ContentType: 'application/octet-stream',
+            Metadata: { 'archive-key': archiveKey }
+          })
+        )
+      } catch (error) {
+        const status =
+          isObject(error) && isObject(error.$metadata) ? error.$metadata.httpStatusCode : undefined
+        if (typeof status === 'number' && status >= 400 && status < 500 && status !== 408)
+          throw this.mapCloudError(error, '云端保存被拒绝，原存档未覆盖。')
+        // A dropped response does not prove that S3 rejected the atomic PUT.
+        const confirmed = await this.readCurrentMetadata(client, settings).catch(() => null)
+        if (confirmed?.Metadata?.['archive-key'] !== archiveKey)
+          throw new AppError(
+            'CLOUD_UNAVAILABLE',
+            `云端保存结果待确认，请刷新存档列表后检查，再决定是否重新保存。${describeCloudFailure(error)}`
+          )
+      }
       const warnings: string[] = []
       try {
-        await this.pruneBackups(client, settings, objectKey)
-      } catch (error) {
-        warnings.push(
-          error instanceof AppError
-            ? error.message
-            : '备份保留数量未能核实，本次上传已完成；请检查网络后重试。'
+        await client.send(
+          new PutObjectCommand({
+            Bucket: settings.bucket,
+            Key: archiveKey,
+            Body: body,
+            ContentType: 'application/octet-stream'
+          })
         )
+        await this.pruneBackups(client, settings, archiveKey)
+      } catch {
+        warnings.push('云端当前存档已覆盖，但历史记录保存或清理未完成，请检查网络和存储权限。')
       }
       return {
         objectKey,
         createdAt: document.createdAt,
         providerCount: document.providers.length,
-        commonConfigCount: PROVIDER_TOOL_IDS.filter(
-          (toolId) => document.commonConfigs[toolId] !== null
-        ).length,
-        message:
-          warnings.length > 0
-            ? '已将供应商配置和共通配置加密上传到云端。'
-            : `已加密上传配置，云端最多保留最近 ${settings.retentionCount} 份备份。`,
+        commonConfigCount: PROVIDER_TOOL_IDS.filter((id) => common[id] !== null).length,
+        message: '已用本地完整配置覆盖云端当前存档，API Key 已随文件加密保存。',
         warnings
       }
     } catch (error) {
-      if (error instanceof AppError) throw error
-      throw this.mapCloudError(error, '云端备份上传失败，请检查网络和存储配置。')
+      throw this.mapCloudError(error, '云端保存失败，请检查网络和存储配置。')
     } finally {
       client.destroy()
     }
   }
 
-  async restore(encryptionPassword: string): Promise<CloudBackupOperationResult> {
+  async restore(
+    encryptionPassword: string,
+    selectedKey?: string
+  ): Promise<CloudBackupOperationResult> {
     assertEncryptionPassword(encryptionPassword)
     const { client, settings } = this.getClient()
     try {
-      const backups = await this.listBackups(client, settings)
-      const latest = backups.sort(compareBackups).at(-1)
-      if (!latest) {
-        throw new AppError(
-          'CLOUD_BACKUP_INVALID',
-          '云端还没有找到 AI Switch 备份，请先上传一份备份。'
-        )
+      const prefix = getObjectPrefix(settings)
+      let objectKey = selectedKey
+      if (objectKey && !isBackupKey(objectKey, prefix))
+        throw new AppError('INVALID_INPUT', '请选择当前云端目录中的有效存档。')
+      if (!objectKey) {
+        const current = await this.readCurrentMetadata(client, settings)
+        objectKey = current
+          ? `${prefix}${CURRENT_OBJECT_NAME}`
+          : (await this.listBackups(client, settings)).sort(compareBackups).at(-1)?.key
       }
-      const objectKey = latest.key
+      if (!objectKey)
+        throw new AppError('CLOUD_BACKUP_INVALID', '云端还没有存档，请先保存一份配置。')
       const response = await client.send(
         new GetObjectCommand({ Bucket: settings.bucket, Key: objectKey })
       )
-      if (!response.Body || typeof response.Body.transformToString !== 'function') {
-        throw new AppError('CLOUD_BACKUP_INVALID', '云端备份正文为空或格式不受支持。')
-      }
-      const encrypted = await response.Body.transformToString()
-      const document = decryptDocument(encrypted, encryptionPassword)
-      // Validate every payload before replacing any local file, including legacy templates.
-      try {
-        document.providers = this.providerStore.validatePortable(document.providers)
-        for (const toolId of TOOL_IDS) {
-          const common = document.commonConfigs[toolId]
-          if (common !== null) parseConfiguration(toolId, common)
-          const state = document.managedStates?.[toolId]
-          if (state !== undefined && state !== null)
-            this.managedStates.decode(JSON.stringify(state))
-          if (state?.common !== undefined) parseConfiguration(toolId, state.common)
-        }
-        document.commonConfigs = this.commonConfigs.normalizePortable(document.commonConfigs)
-      } catch {
-        throw new AppError(
-          'CLOUD_BACKUP_INVALID',
-          '云端备份包含无效的供应商、共通配置或接管状态，未修改本地配置。'
-        )
-      }
-      const previousProviders = await this.providerStore.exportPortable()
-      const previousCommonConfigs = await this.commonConfigs.exportPortable()
-      const previousManagedStates = await this.managedStates.exportPortable()
-      try {
-        await this.providerStore.importPortable(document.providers)
-        await this.commonConfigs.importPortable(document.commonConfigs)
-        await this.managedStates.importPortable(document.managedStates!)
-      } catch (error) {
-        try {
-          await this.providerStore.importPortable(previousProviders)
-          await this.commonConfigs.importPortable(previousCommonConfigs)
-          await this.managedStates.importPortable(previousManagedStates)
-        } catch {
-          throw new AppError(
-            'ROLLBACK_FAILED',
-            '云端恢复失败且本地回滚未完成，请重新打开应用检查配置。'
-          )
-        }
-        throw error
-      }
+      if (!response.Body || typeof response.Body.transformToString !== 'function')
+        throw new AppError('CLOUD_BACKUP_INVALID', '云端存档正文为空，未修改本地配置。')
+      // One GET pins the selected object contents for this restore, even if another device uploads.
+      const document = this.validateDocument(
+        decryptDocument(await response.Body.transformToString(), encryptionPassword)
+      )
+      await this.applyDocument(document, 'cloud')
       return {
         objectKey,
         createdAt: document.createdAt,
         providerCount: document.providers.length,
-        commonConfigCount: PROVIDER_TOOL_IDS.filter(
-          (toolId) => document.commonConfigs[toolId] !== null
-        ).length,
-        message: `已从最新云端备份恢复 ${document.providers.length} 个供应商、模型预设和共通配置，请手动应用到对应工具。`,
+        commonConfigCount: PROVIDER_TOOL_IDS.filter((id) => document.commonConfigs[id] !== null)
+          .length,
+        message: '已用云端存档完整覆盖本地供应商和通用配置，本地变更未合并；请手动应用到工具。',
         warnings: []
       }
     } catch (error) {
-      if (error instanceof AppError) throw error
-      throw this.mapCloudError(error, '云端备份下载失败，请检查网络和存储配置。')
+      throw this.mapCloudError(error, '云端存档应用失败，请检查网络和目录权限。')
     } finally {
       client.destroy()
+    }
+  }
+
+  listLocalBackups(): Promise<ConfigurationBackupSummary[]> {
+    return this.archives.list()
+  }
+
+  async restoreLocal(backupId: string): Promise<void> {
+    const archive = await this.archives.read(backupId)
+    if (archive.reason === 'migration')
+      throw new AppError('INVALID_INPUT', '迁移原始备份请从应用数据目录找回。')
+    const providers = archive.files['providers.json']
+    let parsed: unknown
+    try {
+      parsed = providers === null ? { providers: [] } : JSON.parse(providers)
+    } catch {
+      throw new AppError('STORAGE_CORRUPTED', '本机配置快照中的供应商数据无法解析。')
+    }
+    if (!isObject(parsed) || !Array.isArray(parsed.providers))
+      throw new AppError('STORAGE_CORRUPTED', '本机配置快照缺少供应商资料。')
+    const commonConfigs = Object.fromEntries(
+      PROVIDER_TOOL_IDS.map((id) => {
+        const name = `${id}.common.json`
+        if (!Object.hasOwn(archive.files, name))
+          throw new AppError('STORAGE_CORRUPTED', '本机配置快照缺少通用模板。')
+        return [id, this.commonConfigs.decode(archive.files[name])]
+      })
+    ) as CloudBackupDocument['commonConfigs']
+    await this.applyDocument(
+      this.validateDocument({
+        createdAt: archive.createdAt,
+        providers: parsed.providers,
+        commonConfigs
+      }),
+      'restore'
+    )
+  }
+
+  private validateDocument(value: unknown): CloudBackupDocument {
+    if (
+      !isObject(value) ||
+      (value.version !== undefined && ![1, 2, 3].includes(value.version as number)) ||
+      typeof value.createdAt !== 'string' ||
+      !Number.isFinite(Date.parse(value.createdAt)) ||
+      !Array.isArray(value.providers) ||
+      !isObject(value.commonConfigs)
+    )
+      throw new AppError('CLOUD_BACKUP_INVALID', '存档缺少完整配置或格式无效，未修改本地配置。')
+    try {
+      const providers = this.providerStore.validatePortable(value.providers)
+      const common = this.commonConfigs.normalizePortable(
+        value.commonConfigs as Partial<Record<ToolId, string | null>>
+      )
+      return {
+        createdAt: value.createdAt,
+        providers,
+        commonConfigs: Object.fromEntries(
+          PROVIDER_TOOL_IDS.map((id) => [id, common[id]])
+        ) as CloudBackupDocument['commonConfigs']
+      }
+    } catch {
+      throw new AppError('CLOUD_BACKUP_INVALID', '存档中的供应商或通用模板无效，未修改本地配置。')
+    }
+  }
+
+  private async applyDocument(
+    document: CloudBackupDocument,
+    reason: 'cloud' | 'restore'
+  ): Promise<void> {
+    const previous = await this.archives.capturePortable()
+    const backup = await this.archives.prepare(previous, reason)
+    this.database.transaction(() => {
+      if (JSON.stringify(this.archives.capturePortableSync()) !== JSON.stringify(previous))
+        throw new AppError(
+          'CONCURRENT_MODIFICATION',
+          '本地配置已在备份期间改变，未执行覆盖，请重试。'
+        )
+      this.archives.register(backup)
+      this.providerStore.replacePortable(document.providers)
+      this.commonConfigs.replacePortable(document.commonConfigs)
+    })
+  }
+
+  private async readCurrentMetadata(
+    client: S3Client,
+    settings: CloudBackupSettings
+  ): Promise<HeadObjectCommandOutput | null> {
+    try {
+      return await client.send(
+        new HeadObjectCommand({
+          Bucket: settings.bucket,
+          Key: `${getObjectPrefix(settings)}${CURRENT_OBJECT_NAME}`
+        })
+      )
+    } catch (error) {
+      if (
+        isObject(error) &&
+        (error.name === 'NotFound' ||
+          error.name === 'NoSuchKey' ||
+          (isObject(error.$metadata) && error.$metadata.httpStatusCode === 404))
+      )
+        return null
+      throw error
     }
   }
 
@@ -215,16 +338,14 @@ export class CloudBackupService {
         })
       )
       for (const object of response.Contents ?? []) {
-        if (object.Key && isBackupKey(object.Key, prefix)) {
+        if (object.Key && isBackupKey(object.Key, prefix))
           backups.push({ key: object.Key, lastModified: object.LastModified?.getTime() ?? 0 })
-        }
       }
       if (
         response.IsTruncated &&
         (!response.NextContinuationToken || response.NextContinuationToken === continuationToken)
-      ) {
-        throw new AppError('CLOUD_UNAVAILABLE', '无法完整列出云端备份，请重试。')
-      }
+      )
+        throw new AppError('CLOUD_UNAVAILABLE', '无法完整列出云端存档，请重试。')
       continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined
     } while (continuationToken)
     return backups
@@ -235,52 +356,26 @@ export class CloudBackupService {
     settings: CloudBackupSettings,
     uploadedKey: string
   ): Promise<void> {
-    let backups: CloudBackupObject[]
-    try {
-      backups = await this.listBackups(client, settings)
-    } catch (error) {
-      throw new AppError(
-        'CLOUD_UNAVAILABLE',
-        `备份列表读取失败，尚未核实保留数量，未执行清理。${describeCloudFailure(error, 'list')}`
-      )
-    }
-    const previousBackups = backups
-      .filter((backup) => backup.key !== uploadedKey)
+    const current = await this.readCurrentMetadata(client, settings)
+    // Another device may have committed since this upload. Its cleanup owns the current policy.
+    if (current?.Metadata?.['archive-key'] !== uploadedKey) return
+    const currentKey = `${getObjectPrefix(settings)}${CURRENT_OBJECT_NAME}`
+    const previous = (await this.listBackups(client, settings))
+      .filter((item) => item.key !== uploadedKey && item.key !== currentKey)
       .sort(compareBackups)
-    const excessCount = Math.max(0, previousBackups.length + 1 - settings.retentionCount)
-    const expiredBackups = previousBackups.slice(0, excessCount)
-    if (expiredBackups.length === 0) return
-    try {
-      await this.deleteBackups(client, settings, expiredBackups)
-    } catch (error) {
-      throw new AppError(
-        'CLOUD_UNAVAILABLE',
-        `已核实备份列表，但旧备份清理未完成；新上传的备份已保留。${describeCloudFailure(error, 'delete')}`
-      )
-    }
-  }
-
-  private async deleteBackups(
-    client: S3Client,
-    settings: CloudBackupSettings,
-    backups: CloudBackupObject[]
-  ): Promise<void> {
-    for (let offset = 0; offset < backups.length; offset += 1000) {
+    const expired = previous.slice(0, Math.max(0, previous.length + 1 - settings.retentionCount))
+    for (let offset = 0; offset < expired.length; offset += 1000) {
       const response = await client.send(
         new DeleteObjectsCommand({
           Bucket: settings.bucket,
           Delete: {
-            Objects: backups.slice(offset, offset + 1000).map((backup) => ({ Key: backup.key })),
+            Objects: expired.slice(offset, offset + 1000).map((item) => ({ Key: item.key })),
             Quiet: true
           }
         })
       )
-      if (response.Errors?.length) {
-        throw new AppError(
-          'CLOUD_UNAVAILABLE',
-          `存储服务未能删除 ${response.Errors.length} 个旧备份。${describeCloudFailure(response.Errors[0], 'delete')}`
-        )
-      }
+      if (response.Errors?.length)
+        throw new AppError('CLOUD_UNAVAILABLE', '旧存档清理未完成，请检查删除权限。')
     }
   }
 
@@ -288,136 +383,91 @@ export class CloudBackupService {
     client: S3Client
     settings: CloudBackupSettings
   } {
-    const credentials = this.appSettings.getCloudBackupCredentials(input)
-    const settings = credentials.settings
-    if (!settings.enabled) {
-      throw new AppError('CLOUD_NOT_CONFIGURED', '请先启用并保存 S3 兼容云端备份。')
-    }
-    if (
-      !settings.bucket ||
-      !settings.region ||
-      !settings.accessKeyId ||
-      !credentials.secretAccessKey
-    ) {
+    const { settings, secretAccessKey } = this.appSettings.getCloudBackupCredentials(input)
+    if (!settings.enabled)
+      throw new AppError('CLOUD_NOT_CONFIGURED', '请先启用并保存云端备份设置。')
+    if (!settings.bucket || !settings.region || !settings.accessKeyId || !secretAccessKey)
       throw new AppError(
         'CLOUD_NOT_CONFIGURED',
         '请完整填写存储桶、区域、Access Key 和 Secret Key。'
       )
-    }
     if (settings.endpoint) {
       try {
-        const url = new URL(settings.endpoint)
-        if (url.protocol !== 'http:' && url.protocol !== 'https:')
+        if (!['http:', 'https:'].includes(new URL(settings.endpoint).protocol))
           throw new Error('Invalid endpoint')
       } catch {
         throw new AppError('CLOUD_NOT_CONFIGURED', 'S3 端点必须是有效的 HTTP(S) 地址。')
       }
     }
-    const client = new S3Client({
-      region: settings.region,
-      endpoint: settings.endpoint || undefined,
-      forcePathStyle: Boolean(settings.endpoint),
-      credentials: {
-        accessKeyId: settings.accessKeyId,
-        secretAccessKey: credentials.secretAccessKey
-      }
-    })
-    return { client, settings }
+    getObjectPrefix(settings)
+    return {
+      settings,
+      client: new S3Client({
+        region: settings.region,
+        endpoint: settings.endpoint || undefined,
+        forcePathStyle: Boolean(settings.endpoint),
+        maxAttempts: 2,
+        requestHandler: { connectionTimeout: 5000, requestTimeout: 15000 },
+        credentials: { accessKeyId: settings.accessKeyId, secretAccessKey }
+      })
+    }
   }
 
   private mapCloudError(error: unknown, fallback: string): AppError {
     if (error instanceof AppError) return error
-    const name = error instanceof Error ? error.name : ''
-    if (name === 'NoSuchKey' || name === 'NotFound') {
+    if (isObject(error) && (error.code === 'EACCES' || error.code === 'EPERM'))
       return new AppError(
-        'CLOUD_BACKUP_INVALID',
-        '云端还没有找到 AI Switch 备份，请先上传一份备份。'
+        'PERMISSION_DENIED',
+        '没有权限写入本地配置，或文件正在被占用；请检查目录权限并关闭占用文件的程序后重试。'
       )
-    }
-    if (name === 'AccessDenied' || name === 'Forbidden') {
-      return new AppError(
-        'CLOUD_UNAVAILABLE',
-        '云端访问被拒绝，请检查凭据及存储桶的列出、读取、写入和删除权限。'
-      )
-    }
-    return new AppError('CLOUD_UNAVAILABLE', fallback)
+    if (isObject(error) && (error.name === 'NoSuchKey' || error.name === 'NotFound'))
+      return new AppError('CLOUD_BACKUP_INVALID', '所选云端存档不存在，请刷新列表。')
+    return new AppError('CLOUD_UNAVAILABLE', `${fallback}${describeCloudFailure(error)}`)
   }
 }
 
 function assertEncryptionPassword(password: string): void {
   if (
     typeof password !== 'string' ||
-    password.length < PASSWORD_MIN_LENGTH ||
+    password.length < 8 ||
     password.length > 256 ||
     /[\r\n]/u.test(password)
-  ) {
-    throw new AppError(
-      'INVALID_INPUT',
-      `云端备份密码长度应为 ${PASSWORD_MIN_LENGTH} 到 256 个字符，且不能包含换行。`
-    )
-  }
+  )
+    throw new AppError('INVALID_INPUT', '云端备份密码应为 8 到 256 个字符，且不能包含换行。')
 }
-
 function getObjectPrefix(settings: CloudBackupSettings): string {
   const prefix = settings.prefix.trim().replace(/^\/+|\/+$/gu, '')
-  if (!prefix || prefix.includes('..') || hasControlCharacters(prefix)) {
+  if (
+    !prefix ||
+    prefix.includes('..') ||
+    Array.from(prefix).some(
+      (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127
+    )
+  )
     throw new AppError('CLOUD_NOT_CONFIGURED', '云端备份前缀无效。')
-  }
   return `${prefix}/`
 }
-
 function isBackupKey(key: string, prefix: string): boolean {
   if (!key.startsWith(prefix)) return false
-  const relativeKey = key.slice(prefix.length)
+  const relative = key.slice(prefix.length)
   return (
-    relativeKey === LEGACY_OBJECT_NAME ||
-    (relativeKey.startsWith('backups/') && /\.v[123]\.json\.enc$/u.test(relativeKey))
+    relative === CURRENT_OBJECT_NAME ||
+    relative === LEGACY_OBJECT_NAME ||
+    /^backups\/[^/]+(?:\.v[123])?\.json\.enc$/u.test(relative)
   )
 }
-
-function compareBackups(left: CloudBackupObject, right: CloudBackupObject): number {
-  return left.lastModified - right.lastModified || left.key.localeCompare(right.key)
+function compareBackups(a: CloudBackupObject, b: CloudBackupObject): number {
+  return a.lastModified - b.lastModified || a.key.localeCompare(b.key)
 }
-
-function describeCloudFailure(error: unknown, action: 'list' | 'delete'): string {
-  if (error instanceof AppError) return error.message
-  const details =
-    typeof error === 'object' && error !== null ? (error as Record<string, unknown>) : {}
-  const code = details.Code ?? details.name
-  const metadata =
-    typeof details.$metadata === 'object' && details.$metadata !== null
-      ? (details.$metadata as Record<string, unknown>)
-      : {}
-  const status = metadata.httpStatusCode
-  if (code === 'AccessDenied' || code === 'Forbidden' || status === 403) {
-    const permission = action === 'delete' ? '删除' : '备份列表'
-    return `存储服务拒绝访问，请检查${permission}权限。`
-  }
-  if (
-    code === 'NotImplemented' ||
-    code === 'NotSupported' ||
-    code === 'MethodNotAllowed' ||
-    status === 405 ||
-    status === 501
-  ) {
-    return `存储服务不支持${action === 'delete' ? '批量删除' : '备份列表'}接口，请检查 S3 兼容性。`
-  }
-  if (code === 'NoSuchBucket' || status === 404) return '未找到存储桶，请检查存储桶名称和端点。'
-  if (code === 'TimeoutError' || code === 'AbortError' || code === 'RequestTimeout') {
-    return '请求超时，请检查网络后重试。'
-  }
-  return typeof status === 'number'
-    ? `存储服务返回 HTTP ${status}，请检查端点和网络后重试。`
-    : '请求未完成，请检查端点和网络后重试。'
+function describeCloudFailure(error: unknown): string {
+  const details = isObject(error) ? error : {}
+  const status = isObject(details.$metadata) ? details.$metadata.httpStatusCode : undefined
+  if (status === 403 || details.name === 'AccessDenied')
+    return '请检查存储桶的列出、读取、写入和删除权限。'
+  if (status === 404 || details.name === 'NoSuchBucket')
+    return '未找到存储桶或对象，请刷新列表并检查端点。'
+  return '请检查网络和 S3 兼容存储设置后重试。'
 }
-
-function hasControlCharacters(value: string): boolean {
-  return Array.from(value).some((character) => {
-    const code = character.charCodeAt(0)
-    return code < 32 || code === 127
-  })
-}
-
 function encryptDocument(document: CloudBackupDocument, password: string): string {
   const salt = randomBytes(16)
   const iv = randomBytes(12)
@@ -427,115 +477,45 @@ function encryptDocument(document: CloudBackupDocument, password: string): strin
     cipher.update(JSON.stringify(document), 'utf8'),
     cipher.final()
   ])
-  const envelope: EncryptedEnvelope = {
-    version: ENVELOPE_VERSION,
+  return JSON.stringify({
     algorithm: 'aes-256-gcm',
     kdf: 'scrypt',
     salt: salt.toString('base64'),
     iv: iv.toString('base64'),
     tag: cipher.getAuthTag().toString('base64'),
     ciphertext: ciphertext.toString('base64')
-  }
-  return JSON.stringify(envelope)
+  } satisfies EncryptedEnvelope)
 }
-
-function decryptDocument(encrypted: string, password: string): CloudBackupDocument {
+function decryptDocument(encrypted: string, password: string): unknown {
   try {
     const value: unknown = JSON.parse(encrypted)
-    if (!isEnvelope(value)) throw new Error('Invalid envelope')
-    const key = scryptSync(password, Buffer.from(value.salt, 'base64'), 32, {
-      N: 32768,
-      r: 8,
-      p: 1,
-      maxmem: 64 * 1024 * 1024
-    })
-    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(value.iv, 'base64'))
-    decipher.setAuthTag(Buffer.from(value.tag, 'base64'))
-    const plaintext = Buffer.concat([
-      decipher.update(Buffer.from(value.ciphertext, 'base64')),
-      decipher.final()
-    ]).toString('utf8')
-    const document: unknown = JSON.parse(plaintext)
-    if (!isCloudBackupDocument(document)) throw new Error('Invalid backup document')
-    // Older documents predate WSL. Normalize missing entries before validation and import.
-    document.managedStates ??= {} as Record<ToolId, ManagedState | null>
-    for (const toolId of TOOL_IDS) {
-      document.commonConfigs[toolId] ??= null
-      document.managedStates[toolId] ??= null
-    }
-    return document
+    if (
+      !isObject(value) ||
+      (value.version !== undefined && value.version !== 1) ||
+      value.algorithm !== 'aes-256-gcm' ||
+      value.kdf !== 'scrypt' ||
+      !['salt', 'iv', 'tag', 'ciphertext'].every((key) => typeof value[key] === 'string')
+    )
+      throw new Error('Invalid envelope')
+    const envelope = value as unknown as EncryptedEnvelope
+    const salt = Buffer.from(envelope.salt, 'base64')
+    const iv = Buffer.from(envelope.iv, 'base64')
+    const tag = Buffer.from(envelope.tag, 'base64')
+    if (salt.length !== 16 || iv.length !== 12 || tag.length !== 16)
+      throw new Error('Invalid encryption parameters')
+    const key = scryptSync(password, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 })
+    const decipher = createDecipheriv('aes-256-gcm', key, iv)
+    decipher.setAuthTag(tag)
+    return JSON.parse(
+      Buffer.concat([
+        decipher.update(Buffer.from(envelope.ciphertext, 'base64')),
+        decipher.final()
+      ]).toString('utf8')
+    )
   } catch {
     throw new AppError(
       'CLOUD_BACKUP_INVALID',
-      '云端备份无法解密或校验失败，请确认输入了相同的备份密码。'
+      '云端存档无法解密或完整性校验失败，请确认备份密码，或选择其他存档。'
     )
   }
-}
-
-function isEnvelope(value: unknown): value is EncryptedEnvelope {
-  if (typeof value !== 'object' || value === null) return false
-  const input = value as Record<string, unknown>
-  return (
-    input.version === ENVELOPE_VERSION &&
-    input.algorithm === 'aes-256-gcm' &&
-    input.kdf === 'scrypt' &&
-    typeof input.salt === 'string' &&
-    typeof input.iv === 'string' &&
-    typeof input.tag === 'string' &&
-    typeof input.ciphertext === 'string'
-  )
-}
-
-function isCloudBackupDocument(value: unknown): value is CloudBackupDocument {
-  if (typeof value !== 'object' || value === null) return false
-  const input = value as Record<string, unknown>
-  if (
-    ![1, 2, CLOUD_DOCUMENT_VERSION].includes(input.version as number) ||
-    typeof input.createdAt !== 'string' ||
-    !Array.isArray(input.providers) ||
-    typeof input.commonConfigs !== 'object' ||
-    input.commonConfigs === null ||
-    Array.isArray(input.commonConfigs)
-  ) {
-    return false
-  }
-  if (
-    (input.version !== 1 || input.managedStates !== undefined) &&
-    (typeof input.managedStates !== 'object' ||
-      input.managedStates === null ||
-      Array.isArray(input.managedStates) ||
-      !TOOL_IDS.filter((toolId) => input.version === 3 || !isWslTool(toolId)).every((toolId) =>
-        Object.hasOwn(input.managedStates as object, toolId)
-      ))
-  )
-    return false
-  const commonConfigs = input.commonConfigs as Record<string, unknown>
-  if (
-    !TOOL_IDS.every(
-      (toolId) =>
-        (input.version !== 3 && isWslTool(toolId) && !Object.hasOwn(commonConfigs, toolId)) ||
-        commonConfigs[toolId] === null ||
-        typeof commonConfigs[toolId] === 'string'
-    )
-  ) {
-    return false
-  }
-  return input.providers.every(isPortableProvider)
-}
-
-function isPortableProvider(value: unknown): value is PortableProvider {
-  if (typeof value !== 'object' || value === null) return false
-  const input = value as Record<string, unknown>
-  return (
-    typeof input.id === 'string' &&
-    typeof input.name === 'string' &&
-    typeof input.baseUrl === 'string' &&
-    typeof input.apiKey === 'string' &&
-    Array.isArray(input.tools) &&
-    input.tools.every((toolId) => TOOL_IDS.includes(toolId as ToolId)) &&
-    ((typeof input.models === 'object' && input.models !== null) ||
-      (typeof input.configurations === 'object' && input.configurations !== null)) &&
-    typeof input.createdAt === 'string' &&
-    typeof input.updatedAt === 'string'
-  )
 }

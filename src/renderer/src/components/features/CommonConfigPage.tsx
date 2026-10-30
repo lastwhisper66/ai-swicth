@@ -415,7 +415,7 @@ function CommonConfigEditor({
                 </Field>
               </section>
               <p className="text-xs leading-6 break-all text-muted-foreground">
-                本地模板：{configuration.templatePath}
+                通用模板保存到应用，应用供应商时写入工具配置。
               </p>
             </div>
           )

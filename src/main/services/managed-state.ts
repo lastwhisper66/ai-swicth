@@ -1,5 +1,3 @@
-import { join } from 'node:path'
-import { unlink } from 'node:fs/promises'
 import { isDeepStrictEqual } from 'node:util'
 import { TOOL_IDS, type ToolId } from '@shared/ipc'
 import {
@@ -12,7 +10,7 @@ import {
   type OwnedField
 } from '@shared/configuration'
 import { AppError } from '../errors'
-import { readOptionalText, writeTextAtomic } from '../utils/files'
+import type { AppDatabase } from '../database'
 
 export type DesiredField = { path: ConfigPath; value: unknown }
 
@@ -43,17 +41,20 @@ export function verifyFields(root: ConfigObject, desired: DesiredField[]): boole
 }
 
 export class ManagedStateStore {
-  constructor(private readonly rootPath: string) {}
-  getPath(toolId: ToolId): string {
-    return join(this.rootPath, `${toolId}.managed.v1.json`)
+  constructor(private readonly database: AppDatabase) {}
+  getReference(toolId: ToolId): string {
+    return `state:${toolId}`
   }
   decode(content: string | null): ManagedState | null {
+    return ManagedStateStore.decode(content)
+  }
+  static decode(content: string | null): ManagedState | null {
     if (content === null) return null
     try {
       const value: unknown = JSON.parse(content)
       if (
         !isObject(value) ||
-        value.version !== 1 ||
+        (value.version !== undefined && value.version !== 1) ||
         typeof value.targetPath !== 'string' ||
         !Array.isArray(value.fields)
       )
@@ -87,16 +88,18 @@ export class ManagedStateStore {
               !/^[a-f0-9]{64}$/u.test(value.selection.signature))))
       )
         throw new Error('Invalid selection')
-      return value as unknown as ManagedState
+      const state = { ...value }
+      delete state.version
+      return state as unknown as ManagedState
     } catch {
       throw new AppError('STORAGE_CORRUPTED', '配置接管状态损坏。请从本地备份恢复后再操作。')
     }
   }
   encode(state: ManagedState): string {
-    return `${JSON.stringify(state, null, 2)}\n`
+    return `${JSON.stringify(this.decode(JSON.stringify(state)), null, 2)}\n`
   }
   async get(toolId: ToolId): Promise<ManagedState | null> {
-    return this.decode(await readOptionalText(this.getPath(toolId)))
+    return this.decode(this.database.readRecord(this.getReference(toolId)))
   }
   async exportPortable(): Promise<Record<ToolId, ManagedState | null>> {
     return Object.fromEntries(
@@ -104,18 +107,13 @@ export class ManagedStateStore {
     ) as Record<ToolId, ManagedState | null>
   }
   async importPortable(states: Record<ToolId, ManagedState | null>): Promise<void> {
-    for (const toolId of TOOL_IDS) {
-      const state = states[toolId]
-      if (state === null) {
-        await unlink(this.getPath(toolId)).catch((error: unknown) => {
-          if (!(isObject(error) && error.code === 'ENOENT')) throw error
-        })
-      } else {
-        const content = this.encode(state)
-        this.decode(content)
-        await writeTextAtomic(this.getPath(toolId), content, true)
-      }
-    }
+    this.database.transaction(() => {
+      for (const toolId of TOOL_IDS)
+        this.database.writeRecord(
+          this.getReference(toolId),
+          states[toolId] === null ? null : this.encode(states[toolId])
+        )
+    })
   }
 }
 

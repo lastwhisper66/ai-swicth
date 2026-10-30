@@ -23,7 +23,12 @@ const api: DesktopApi = {
   testCloudBackup: (input) => ipcRenderer.invoke(IPC_CHANNELS.testCloudBackup, input),
   uploadCloudBackup: (input) => ipcRenderer.invoke(IPC_CHANNELS.uploadCloudBackup, input),
   restoreCloudBackup: (input) => ipcRenderer.invoke(IPC_CHANNELS.restoreCloudBackup, input),
+  listCloudBackups: () => ipcRenderer.invoke(IPC_CHANNELS.listCloudBackups),
+  restoreConfigurationBackup: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.restoreConfigurationBackup, input),
   setNativeTheme: (input) => ipcRenderer.invoke(IPC_CHANNELS.setNativeTheme, input),
+  initializeTheme: (input) => ipcRenderer.invoke(IPC_CHANNELS.initializeTheme, input),
+  saveTheme: (input) => ipcRenderer.invoke(IPC_CHANNELS.saveTheme, input),
   createProvider: (input) => ipcRenderer.invoke(IPC_CHANNELS.createProvider, input),
   updateProvider: (input) => ipcRenderer.invoke(IPC_CHANNELS.updateProvider, input),
   getProviderSecrets: (input) => ipcRenderer.invoke(IPC_CHANNELS.getProviderSecrets, input),

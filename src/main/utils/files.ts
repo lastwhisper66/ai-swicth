@@ -65,6 +65,46 @@ export function hashContent(content: string | null): string {
     .digest('hex')
 }
 
+/** Replace a group of app-owned files and roll back the whole group on failure. */
+export async function replaceFilesAtomic(files: Record<string, string | null>): Promise<void> {
+  const previous = new Map<string, string | null>()
+  for (const path of Object.keys(files)) {
+    await assertNotSymbolicLink(path)
+    previous.set(path, await readOptionalText(path))
+  }
+  const changed: string[] = []
+  try {
+    for (const [path, content] of Object.entries(files)) {
+      changed.push(path)
+      await replaceText(path, content)
+      if ((await readOptionalText(path)) !== content) throw new Error('Write verification failed')
+    }
+  } catch (error) {
+    let rollbackFailed = false
+    for (const path of changed.reverse()) {
+      try {
+        if ((await readOptionalText(path)) === previous.get(path)) continue
+        await replaceText(path, previous.get(path)!)
+        if ((await readOptionalText(path)) !== previous.get(path)) rollbackFailed = true
+      } catch {
+        rollbackFailed = true
+      }
+    }
+    if (rollbackFailed)
+      throw new AppError('ROLLBACK_FAILED', '配置写入失败且回滚未完成，请从本机备份恢复。')
+    throw error
+  }
+}
+
+async function replaceText(path: string, content: string | null): Promise<void> {
+  if (content !== null) return writeTextAtomic(path, content, true)
+  try {
+    await unlink(path)
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
+  }
+}
+
 export async function assertNotSymbolicLink(filePath: string): Promise<void> {
   try {
     if ((await lstat(filePath)).isSymbolicLink()) {

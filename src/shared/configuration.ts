@@ -81,7 +81,6 @@ export interface OwnedField {
   applied: FieldValue
 }
 export interface ManagedState {
-  version: 1
   targetPath: string
   fields: OwnedField[]
   selection?: { providerId: string; modelId: string; signature?: string }

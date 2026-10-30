@@ -1,5 +1,4 @@
 import { baseToolId, isWslTool } from '@shared/ipc'
-import { unlink } from 'node:fs/promises'
 import type {
   ApplyResult,
   CommonConfig,
@@ -24,21 +23,18 @@ import {
   serializeConfiguration,
   type ManagedState
 } from '@shared/configuration'
-import { toConfigurationInput, validateConfigurations } from '../providers/configuration-validation'
+import { validateConfigurations } from '../providers/configuration-validation'
 import { AppError, isFileSystemError } from '../errors'
 import type { ProviderStore } from '../providers/store'
-import {
-  assertNotSymbolicLink,
-  hashContent,
-  readOptionalText,
-  writeTextAtomic
-} from '../utils/files'
+import { hashContent } from '../utils/files'
+import type { AppDatabase } from '../database'
+import type { ConfigurationTargets } from '../database/configuration-targets'
 import type { BackupPayload, BackupService, CreateBackupInput } from './backup'
 import type { CommonConfigStore } from './common-config'
 import { redactConfiguration } from './config-preview'
 import type { PathSettingsStore } from './path-settings'
 import { ManagedStateStore } from './managed-state'
-import { migrateConfiguration } from './configuration-migration'
+import { moveConfigurationFields } from './configuration-fields'
 
 interface ConfigurationWrite extends GeneratedToolConfiguration {
   relatedContents?: Record<string, string>
@@ -54,7 +50,9 @@ export class SwitchService {
     private readonly backupService: BackupService,
     private readonly adapters: Record<ToolId, ToolAdapter>,
     private readonly commonConfigs: CommonConfigStore,
-    private readonly managedStates: ManagedStateStore
+    private readonly managedStates: ManagedStateStore,
+    private readonly database: AppDatabase,
+    private readonly targets: ConfigurationTargets
   ) {}
 
   async apply(toolId: ToolId, providerId: string, modelId?: string): Promise<ApplyResult> {
@@ -73,9 +71,9 @@ export class SwitchService {
 
       const target = await this.pathSettings.getAvailable(toolId)
       const adapter = this.adapters[toolId]
-      const originalContent = await readTarget(target.path)
-      const statePath = this.managedStates.getPath(toolId)
-      const originalState = await readTarget(statePath)
+      const originalContent = await this.targets.read(target.path)
+      const statePath = this.managedStates.getReference(toolId)
+      const originalState = await this.targets.read(statePath)
       const state = stateForTarget(this.managedStates.decode(originalState), target.path)
       if (originalContent !== null) adapter.parseCurrent(originalContent)
       const configuration = {
@@ -87,7 +85,7 @@ export class SwitchService {
         preset,
         configuration: toolConfiguration
       }
-      const commonPath = this.commonConfigs.getPath(toolId)
+      const commonPath = this.commonConfigs.getReference(toolId)
       const commonSnapshot = await this.commonConfigs.read(toolId)
       const originalCommon = commonSnapshot.files[commonPath] ?? null
       const commonContent = commonSnapshot.content
@@ -161,7 +159,7 @@ export class SwitchService {
     let common = saved ?? serializeConfiguration(toolId, {})
     if (input.fromCurrent) {
       const target = await this.pathSettings.getAvailable(toolId)
-      common = this.adapters[toolId].extractCommon(await readTarget(target.path))
+      common = this.adapters[toolId].extractCommon(await this.targets.read(target.path))
     }
     const root = parseConfiguration(toolId, common)
     const conflicts = providerOptionPaths(toolId, root).map((path) => path.join('.'))
@@ -174,7 +172,6 @@ export class SwitchService {
         ? serializeConfiguration(toolId, root)
         : common,
       source: useSaved ? 'saved' : input.fromCurrent ? 'current' : 'empty',
-      templatePath: this.commonConfigs.getPath(toolId),
       revision: commonRevision(commonSnapshot.files),
       conflicts,
       warnings: commonSnapshot.warnings
@@ -196,11 +193,11 @@ export class SwitchService {
       const previousCommon = commonSnapshot.content ?? serializeConfiguration(toolId, {})
       if (providerOptionPaths(toolId, parseConfiguration(toolId, previousCommon)).length)
         throw new AppError('INVALID_INPUT', '旧共通模板仍包含模型或连接选项，请先迁移归属字段。')
-      const templatePath = this.commonConfigs.getPath(toolId)
+      const templatePath = this.commonConfigs.getReference(toolId)
       const template = commonSnapshot.files[templatePath] ?? null
       const encoded = this.commonConfigs.encode(input.content)
       const hashes = hashTargets(templatePath, template, commonSnapshot.files)
-      await assertTargetsUnchanged(hashes)
+      await this.assertTargetsUnchanged(hashes)
       const backup = await this.backupService.create({
         toolId,
         targetPath: templatePath,
@@ -209,10 +206,10 @@ export class SwitchService {
         providerId: null,
         providerName: null
       })
-      await assertTargetsUnchanged(hashes)
+      await this.assertTargetsUnchanged(hashes)
       try {
-        await writeTextAtomic(templatePath, encoded, true)
-        if ((await readTarget(templatePath)) !== encoded)
+        await this.targets.write(templatePath, encoded, true)
+        if ((await this.targets.read(templatePath)) !== encoded)
           throw new AppError('WRITE_FAILED', '共通模板保存后校验失败。')
       } catch (error) {
         await this.rollbackOrThrow([{ path: templatePath, content: template }])
@@ -306,7 +303,7 @@ export class SwitchService {
       const configuration = provider.configurations[toolId]
       if (!configuration)
         throw new AppError('INCOMPATIBLE_PROVIDER', '请选择适用于此工具的供应商。')
-      const migrated = migrateConfiguration(
+      const migrated = moveConfigurationFields(
         toolId,
         commonSnapshot.content,
         configuration,
@@ -319,10 +316,10 @@ export class SwitchService {
       }
       validateConfigurations(configurations, provider.tools, {}, true)
       const previous = await this.providerStore.exportPortable()
-      const commonPath = this.commonConfigs.getPath(toolId)
+      const commonPath = this.commonConfigs.getReference(toolId)
       const template = commonSnapshot.files[commonPath] ?? null
       const hashes = hashTargets(commonPath, template, commonSnapshot.files)
-      await assertTargetsUnchanged(hashes)
+      await this.assertTargetsUnchanged(hashes)
       await this.backupService.create({
         toolId,
         targetPath: commonPath,
@@ -331,34 +328,17 @@ export class SwitchService {
         providerId: provider.id,
         providerName: provider.name
       })
-      await assertTargetsUnchanged(hashes)
-      let templateWritten = false
-      try {
-        await this.providerStore.update({
-          id: provider.id,
-          name: provider.name,
-          baseUrl: provider.baseUrl,
-          tools: provider.tools,
-          apiKey: { mode: 'keep' },
-          configurations: toConfigurationInput(configurations)
-        })
-        await assertTargetsUnchanged(hashes)
-        await writeTextAtomic(commonPath, encodedTemplate, true)
-        templateWritten = true
-        if ((await readTarget(commonPath)) !== encodedTemplate)
-          throw new AppError('WRITE_FAILED', '迁移后的共通模板读回校验失败。')
-      } catch (error) {
-        try {
-          await this.providerStore.importPortable(previous)
-          if (templateWritten) await restoreTarget(commonPath, template)
-        } catch {
-          throw new AppError(
-            'ROLLBACK_FAILED',
-            '迁移失败且供应商库回滚未完成，请检查应用数据目录。'
+      await this.assertTargetsUnchanged(hashes)
+      this.database.transaction(() => {
+        this.providerStore.replacePortable(
+          previous.map((record) =>
+            record.id === provider.id
+              ? { ...record, configurations, updatedAt: new Date().toISOString() }
+              : record
           )
-        }
-        throw error
-      }
+        )
+        this.database.writeRecord(commonPath, encodedTemplate)
+      })
     })
   }
 
@@ -369,9 +349,9 @@ export class SwitchService {
     stateContent: string | null
   }> {
     const target = await this.pathSettings.getAvailable(toolId)
-    const content = await readTarget(target.path)
+    const content = await this.targets.read(target.path)
     const commonSnapshot = await this.commonConfigs.read(toolId)
-    const stateContent = await readTarget(this.managedStates.getPath(toolId))
+    const stateContent = await this.targets.read(this.managedStates.getReference(toolId))
     return { target, content, commonSnapshot, stateContent }
   }
 
@@ -389,21 +369,26 @@ export class SwitchService {
       ...originalRelated
     })
     verify(generated.content, { ...originalRelated, ...generated.relatedContents })
-    await assertTargetsUnchanged(hashes)
+    await this.assertTargetsUnchanged(hashes)
     const backup = await this.backupService.create(input)
-    await assertTargetsUnchanged(hashes)
+    await this.assertTargetsUnchanged(hashes)
     try {
-      await writeTargetSet(
+      await this.targets.writeSet(
         input.targetPath,
         generated.content,
         generated.relatedContents,
         isWslTool(input.toolId)
       )
-      const written = await readTarget(input.targetPath)
+      const written = await this.targets.read(input.targetPath)
       if (written === null) throw new Error('Target disappeared after write')
-      verify(written, await readTargets(paths))
+      verify(written, await this.readTargets(paths))
     } catch (error) {
-      if (!(await targetsMatch(input.targetPath, input.content, paths, originalRelated))) {
+      if (
+        error instanceof AppError &&
+        (error.code === 'ROLLBACK_FAILED' || error.code === 'CONCURRENT_MODIFICATION')
+      )
+        throw error
+      if (!(await this.targetsMatch(input.targetPath, input.content, paths, originalRelated))) {
         await this.rollbackOrThrow([
           { path: input.targetPath, content: input.content },
           ...paths.map((path) => ({ path, content: originalRelated[path] ?? null }))
@@ -419,9 +404,9 @@ export class SwitchService {
     if (payload.record.reason === 'template') return this.restoreCommonTemplate(payload)
     const { record, content: restoredContent, additionalContents } = payload
     await this.pathSettings.checkBackupTarget(record.toolId, record.targetPath)
-    const restoredStatePath = this.managedStates.getPath(record.toolId)
+    const restoredStatePath = this.managedStates.getReference(record.toolId)
     this.managedStates.decode(additionalContents[restoredStatePath] ?? null)
-    const restoredTemplate = additionalContents[this.commonConfigs.getPath(record.toolId)]
+    const restoredTemplate = additionalContents[this.commonConfigs.getReference(record.toolId)]
     if (restoredTemplate !== undefined && restoredTemplate !== null) {
       const common = this.commonConfigs.decode(restoredTemplate)
       if (common !== null) parseConfiguration(record.toolId, common)
@@ -439,8 +424,8 @@ export class SwitchService {
       const adapter = this.adapters[record.toolId]
       const relatedPaths = (record.additionalFiles ?? []).map((file) => file.path)
       const restoredConfiguration = adapter.parseCurrent(restoredContent)
-      const currentContent = await readTarget(record.targetPath)
-      const currentRelatedContents = await readTargets(relatedPaths)
+      const currentContent = await this.targets.read(record.targetPath)
+      const currentRelatedContents = await this.readTargets(relatedPaths)
       const currentHashes = hashTargets(record.targetPath, currentContent, currentRelatedContents)
       const safetyBackup = await this.backupService.create({
         toolId: record.toolId,
@@ -455,20 +440,20 @@ export class SwitchService {
         providerName: null,
         protectedBackupId: backupId
       })
-      await assertTargetsUnchanged(currentHashes)
+      await this.assertTargetsUnchanged(currentHashes)
 
       try {
-        await writeTargetSet(
+        await this.targets.writeSet(
           record.targetPath,
           restoredContent,
           additionalContents,
           isWslTool(record.toolId)
         )
-        const writtenContent = await readTarget(record.targetPath)
+        const writtenContent = await this.targets.read(record.targetPath)
         if (hashContent(writtenContent) !== record.checksum) {
           throw new Error('Restored checksum mismatch')
         }
-        const writtenRelatedContents = await readTargets(relatedPaths)
+        const writtenRelatedContents = await this.readTargets(relatedPaths)
         for (const file of record.additionalFiles ?? []) {
           if (hashContent(writtenRelatedContents[file.path] ?? null) !== file.checksum) {
             throw new Error('Restored related file checksum mismatch')
@@ -477,7 +462,12 @@ export class SwitchService {
         if (writtenContent !== null) adapter.parseCurrent(writtenContent)
       } catch (error) {
         if (
-          !(await targetsMatch(
+          error instanceof AppError &&
+          (error.code === 'ROLLBACK_FAILED' || error.code === 'CONCURRENT_MODIFICATION')
+        )
+          throw error
+        if (
+          !(await this.targetsMatch(
             record.targetPath,
             currentContent,
             relatedPaths,
@@ -510,13 +500,13 @@ export class SwitchService {
   private async restoreCommonTemplate(payload: BackupPayload): Promise<RestoreResult> {
     const { record, content } = payload
     const toolId = baseToolId(record.toolId)
-    const path = this.commonConfigs.getPath(toolId)
+    const path = this.commonConfigs.getReference(toolId)
     if (record.targetPath !== path || Object.keys(payload.additionalContents).length)
       throw new AppError('STORAGE_CORRUPTED', '共通模板备份路径无效，未修改任何文件。')
     const common = this.commonConfigs.decode(content)
     if (common !== null) parseConfiguration(toolId, common)
     return this.withToolLock(toolId, async () => {
-      const previous = await readTarget(path)
+      const previous = await this.targets.read(path)
       const hashes = hashTargets(path, previous, {})
       const safetyBackup = await this.backupService.create({
         toolId,
@@ -527,10 +517,10 @@ export class SwitchService {
         providerName: null,
         protectedBackupId: record.id
       })
-      await assertTargetsUnchanged(hashes)
+      await this.assertTargetsUnchanged(hashes)
       try {
-        await restoreTarget(path, content)
-        if (hashContent(await readTarget(path)) !== record.checksum)
+        await this.targets.write(path, content)
+        if (hashContent(await this.targets.read(path)) !== record.checksum)
           throw new AppError('WRITE_FAILED', '共通模板恢复后校验失败。')
       } catch (error) {
         await this.rollbackOrThrow([{ path, content: previous }])
@@ -551,12 +541,12 @@ export class SwitchService {
   ): Promise<void> {
     try {
       for (const target of targets) {
-        if (hashContent(await readTarget(target.path)) !== hashContent(target.content)) {
-          await restoreTarget(target.path, target.content)
+        if (hashContent(await this.targets.read(target.path)) !== hashContent(target.content)) {
+          await this.targets.write(target.path, target.content)
         }
       }
       for (const target of targets) {
-        const rolledBackContent = await readTarget(target.path)
+        const rolledBackContent = await this.targets.read(target.path)
         if (hashContent(rolledBackContent) !== hashContent(target.content)) {
           throw new Error('Rollback checksum mismatch')
         }
@@ -581,6 +571,43 @@ export class SwitchService {
     } finally {
       release()
       if (this.locks.get(family) === current) this.locks.delete(family)
+    }
+  }
+
+  private async assertTargetsUnchanged(expectedHashes: Map<string, string>): Promise<void> {
+    for (const [filePath, expectedHash] of expectedHashes) {
+      const currentContent = await this.targets.read(filePath)
+      if (hashContent(currentContent) !== expectedHash) {
+        throw new AppError(
+          'CONCURRENT_MODIFICATION',
+          '配置文件在操作期间被其他程序修改，未写入任何内容。请刷新后重试。'
+        )
+      }
+    }
+  }
+
+  private async readTargets(paths: string[]): Promise<Record<string, string | null>> {
+    const entries = await Promise.all(
+      paths.map(async (path) => [path, await this.targets.read(path)] as const)
+    )
+    return Object.fromEntries(entries)
+  }
+
+  private async targetsMatch(
+    targetPath: string,
+    content: string | null,
+    relatedPaths: string[],
+    relatedContents: Record<string, string | null>
+  ): Promise<boolean> {
+    try {
+      if (hashContent(await this.targets.read(targetPath)) !== hashContent(content)) return false
+      const currentRelated = await this.readTargets(relatedPaths)
+      return relatedPaths.every(
+        (path) =>
+          hashContent(currentRelated[path] ?? null) === hashContent(relatedContents[path] ?? null)
+      )
+    } catch {
+      return false
     }
   }
 }
@@ -612,7 +639,7 @@ function applyCommonTemplate(
 }
 
 function stateForTarget(state: ManagedState | null, path: string): ManagedState {
-  return state?.targetPath === path ? state : { version: 1, targetPath: path, fields: [] }
+  return state?.targetPath === path ? state : { targetPath: path, fields: [] }
 }
 
 function captureAttribution(
@@ -638,90 +665,6 @@ function hashTargets(
     [targetPath, hashContent(content)],
     ...Object.entries(relatedContents).map(([path, value]) => [path, hashContent(value)] as const)
   ])
-}
-
-async function assertTargetsUnchanged(expectedHashes: Map<string, string>): Promise<void> {
-  for (const [filePath, expectedHash] of expectedHashes) {
-    const currentContent = await readTarget(filePath)
-    if (hashContent(currentContent) !== expectedHash) {
-      throw new AppError(
-        'CONCURRENT_MODIFICATION',
-        '配置文件在操作期间被其他程序修改，未写入任何内容。请刷新后重试。'
-      )
-    }
-  }
-}
-
-async function readTarget(filePath: string): Promise<string | null> {
-  try {
-    await assertNotSymbolicLink(filePath)
-    return await readOptionalText(filePath)
-  } catch (error) {
-    if (isFileSystemError(error) && (error.code === 'EACCES' || error.code === 'EPERM')) {
-      throw new AppError('PERMISSION_DENIED', '没有权限读取配置文件，请检查文件权限。')
-    }
-    throw error
-  }
-}
-
-async function writeTarget(filePath: string, content: string, createParent = false): Promise<void> {
-  try {
-    await writeTextAtomic(filePath, content, createParent)
-  } catch (error) {
-    throw mapWriteError(error)
-  }
-}
-
-async function writeTargetSet(
-  targetPath: string,
-  content: string | null,
-  relatedContents: Record<string, string | null> | undefined,
-  createParent = false
-): Promise<void> {
-  if (content === null) await restoreTarget(targetPath, null)
-  else await writeTarget(targetPath, content, createParent)
-  for (const [filePath, relatedContent] of Object.entries(relatedContents ?? {})) {
-    await restoreTarget(filePath, relatedContent)
-  }
-}
-
-async function restoreTarget(filePath: string, content: string | null): Promise<void> {
-  await assertNotSymbolicLink(filePath)
-  if (content !== null) {
-    await writeTarget(filePath, content)
-    return
-  }
-
-  try {
-    await unlink(filePath)
-  } catch (error) {
-    if (!(isFileSystemError(error) && error.code === 'ENOENT')) throw mapWriteError(error)
-  }
-}
-
-async function readTargets(paths: string[]): Promise<Record<string, string | null>> {
-  const entries = await Promise.all(
-    paths.map(async (path) => [path, await readTarget(path)] as const)
-  )
-  return Object.fromEntries(entries)
-}
-
-async function targetsMatch(
-  targetPath: string,
-  content: string | null,
-  relatedPaths: string[],
-  relatedContents: Record<string, string | null>
-): Promise<boolean> {
-  try {
-    if (hashContent(await readTarget(targetPath)) !== hashContent(content)) return false
-    const currentRelated = await readTargets(relatedPaths)
-    return relatedPaths.every(
-      (path) =>
-        hashContent(currentRelated[path] ?? null) === hashContent(relatedContents[path] ?? null)
-    )
-  } catch {
-    return false
-  }
 }
 
 function mapWriteError(error: unknown): AppError {

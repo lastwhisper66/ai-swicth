@@ -11,6 +11,7 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+  - node_modules/better-sqlite3/**
 win:
   executableName: ai-switch
 nsis:
@@ -37,4 +38,5 @@ linux:
   category: Utility
 appImage:
   artifactName: ${name}-${version}.${ext}
+# better-sqlite3 13 ships Node-API prebuilds compatible with Node.js and Electron.
 npmRebuild: false

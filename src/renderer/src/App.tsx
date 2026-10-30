@@ -163,9 +163,17 @@ function App(): React.JSX.Element {
     )
   }
 
-  async function restoreCloudBackup(encryptionPassword: string): Promise<void> {
+  async function restoreCloudBackup(encryptionPassword: string, objectKey?: string): Promise<void> {
     await runCloudBackupOperation('cloud:restore', () =>
-      window.api.restoreCloudBackup({ encryptionPassword })
+      window.api.restoreCloudBackup({ encryptionPassword, objectKey })
+    )
+  }
+
+  async function restoreConfigurationBackup(backupId: string): Promise<void> {
+    await runSnapshotOperation(
+      `configuration:restore:${backupId}`,
+      () => window.api.restoreConfigurationBackup({ backupId }),
+      '已恢复供应商和通用配置，请手动应用到工具。'
     )
   }
 
@@ -404,7 +412,13 @@ function App(): React.JSX.Element {
                   onSaveCloudBackupPassword={saveCloudBackupPassword}
                   onTestCloudBackup={(input) => void testCloudBackup(input)}
                   onUploadCloudBackup={(password) => void uploadCloudBackup(password)}
-                  onRestoreCloudBackup={(password) => void restoreCloudBackup(password)}
+                  onRestoreCloudBackup={(password, objectKey) =>
+                    void restoreCloudBackup(password, objectKey)
+                  }
+                  onRestoreConfigurationBackup={(backupId) =>
+                    void restoreConfigurationBackup(backupId)
+                  }
+                  configurationBackups={snapshot.configurationBackups}
                   onPendingChange={(pending) => setPendingKey(pending ? 'common:save' : null)}
                   onCommonSaved={(nextSnapshot, message) => {
                     adoptSnapshot(nextSnapshot)

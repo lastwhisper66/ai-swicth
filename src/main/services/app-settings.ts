@@ -6,7 +6,8 @@ import type {
 } from '@shared/ipc'
 import { CLOUD_BACKUP_RETENTION } from '@shared/ipc'
 import { AppError } from '../errors'
-import { readOptionalText, writeTextAtomic } from '../utils/files'
+import type { AppDatabase } from '../database'
+import type { AppTheme } from '@shared/ipc'
 
 interface CloudBackupDocument {
   enabled: boolean
@@ -27,30 +28,20 @@ export class AppSettingsStore {
   }
   private cloudSecretAccessKey = ''
 
-  constructor(private readonly filePath: string) {}
+  constructor(private readonly database: AppDatabase) {}
 
   async load(): Promise<void> {
-    const content = await readOptionalText(this.filePath)
-    if (content === null) return
-
     try {
-      const value: unknown = JSON.parse(content)
-      if (typeof value !== 'object' || value === null || !('version' in value)) {
-        throw new Error('Invalid app settings')
-      }
-      if (
-        !('closeBehavior' in value) ||
-        (value.closeBehavior !== 'tray' && value.closeBehavior !== 'quit')
-      ) {
-        throw new Error('Invalid app settings')
-      }
-      if (
-        value.version !== 3 ||
-        !('cloudBackup' in value) ||
-        !isCloudBackupDocument(value.cloudBackup)
-      ) {
-        throw new Error('Invalid app settings')
-      }
+      const closeBehavior =
+        this.database.getSetting<AppSettings['closeBehavior']>(
+          'device_settings',
+          'closeBehavior'
+        ) ?? 'quit'
+      const cloudBackup = this.database.getSetting<CloudBackupDocument>(
+        'cloud_settings',
+        'connection'
+      ) ?? { ...defaultCloudBackupSettings(), secretAccessKey: '' }
+      const value = decodeAppSettingsDocument({ closeBehavior, cloudBackup })
       this.settings = {
         closeBehavior: value.closeBehavior,
         cloudBackup: toPublicCloudBackupSettings(
@@ -72,6 +63,19 @@ export class AppSettingsStore {
       closeBehavior: this.settings.closeBehavior,
       cloudBackup: { ...this.settings.cloudBackup }
     }
+  }
+
+  getTheme(legacyTheme?: AppTheme): AppTheme {
+    const saved = this.database.getSetting<unknown>('device_settings', 'theme')
+    if (saved === 'system' || saved === 'light' || saved === 'dark') return saved
+    if (saved !== null) throw new AppError('STORAGE_CORRUPTED', '主题设置损坏，请重新选择主题。')
+    const theme = legacyTheme ?? 'system'
+    this.setTheme(theme)
+    return theme
+  }
+
+  setTheme(theme: AppTheme): void {
+    this.database.setSetting('device_settings', 'theme', theme)
   }
 
   async set(settings: AppSettingsInput): Promise<void> {
@@ -179,30 +183,38 @@ export class AppSettingsStore {
     closeBehavior: AppSettings['closeBehavior'],
     cloudBackup: CloudBackupSettings
   ): Promise<void> {
-    await writeTextAtomic(
-      this.filePath,
-      `${JSON.stringify(
-        {
-          version: 3,
-          closeBehavior,
-          cloudBackup: {
-            enabled: cloudBackup.enabled,
-            endpoint: cloudBackup.endpoint,
-            region: cloudBackup.region,
-            bucket: cloudBackup.bucket,
-            prefix: cloudBackup.prefix,
-            retentionCount: cloudBackup.retentionCount,
-            accessKeyId: cloudBackup.accessKeyId,
-            secretAccessKey: this.cloudSecretAccessKey,
-            encryptionPassword: cloudBackup.encryptionPassword
-          }
-        },
-        null,
-        2
-      )}\n`,
-      true
-    )
+    this.database.transaction(() => {
+      this.database.setSetting('device_settings', 'closeBehavior', closeBehavior)
+      this.database.setSetting('cloud_settings', 'connection', {
+        enabled: cloudBackup.enabled,
+        endpoint: cloudBackup.endpoint,
+        region: cloudBackup.region,
+        bucket: cloudBackup.bucket,
+        prefix: cloudBackup.prefix,
+        retentionCount: cloudBackup.retentionCount,
+        accessKeyId: cloudBackup.accessKeyId,
+        secretAccessKey: this.cloudSecretAccessKey,
+        encryptionPassword: cloudBackup.encryptionPassword
+      })
+    })
   }
+}
+
+export function decodeAppSettingsDocument(value: unknown): {
+  closeBehavior: AppSettings['closeBehavior']
+  cloudBackup: CloudBackupDocument
+} {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    !('closeBehavior' in value) ||
+    (value.closeBehavior !== 'tray' && value.closeBehavior !== 'quit') ||
+    ('version' in value && value.version !== 3) ||
+    !('cloudBackup' in value) ||
+    !isCloudBackupDocument(value.cloudBackup)
+  )
+    throw new AppError('STORAGE_CORRUPTED', '应用设置格式损坏，请检查原始数据或从备份恢复。')
+  return { closeBehavior: value.closeBehavior, cloudBackup: value.cloudBackup }
 }
 
 function defaultCloudBackupSettings(): CloudBackupSettings {

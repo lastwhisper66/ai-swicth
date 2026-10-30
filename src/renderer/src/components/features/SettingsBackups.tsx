@@ -4,6 +4,7 @@ import type {
   BackupSummary,
   CloudBackupSettings,
   CloudBackupSettingsInput,
+  ConfigurationBackupSummary,
   OpenToolLocationInput,
   ToolId,
   ToolStatus
@@ -47,6 +48,8 @@ interface SettingsBackupsProps {
   section: 'paths' | 'backups'
   tools: Record<ToolId, ToolStatus>
   backups: BackupSummary[]
+  configurationBackups: ConfigurationBackupSummary[]
+  onRestoreConfigurationBackup: (backupId: string) => void
   cloudBackup: CloudBackupSettings
   pendingKey: string | null
   busy: boolean
@@ -58,13 +61,15 @@ interface SettingsBackupsProps {
   onSaveCloudBackupPassword: (password: string) => Promise<boolean>
   onTestCloudBackup: (input: CloudBackupSettingsInput) => void
   onUploadCloudBackup: (password: string) => void
-  onRestoreCloudBackup: (password: string) => void
+  onRestoreCloudBackup: (password: string, objectKey?: string) => void
 }
 
 export function SettingsBackups({
   section,
   tools,
   backups,
+  configurationBackups,
+  onRestoreConfigurationBackup,
   cloudBackup,
   pendingKey,
   busy,
@@ -126,6 +131,52 @@ export function SettingsBackups({
             onUpload={onUploadCloudBackup}
             onRestore={onRestoreCloudBackup}
           />
+          {configurationBackups.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-medium">覆盖前的本机配置快照</h3>
+              <p className="text-xs text-muted-foreground">
+                恢复供应商和通用模板，当前配置会先备份；工具文件和本机设置保持不变。
+              </p>
+              <ItemGroup className="gap-0 divide-y overflow-hidden rounded-xl border bg-card">
+                {configurationBackups.map((backup) => (
+                  <Item key={backup.id} className="border-0 rounded-none">
+                    <ItemContent>
+                      <ItemTitle>
+                        {formatDate(backup.createdAt)} ·{' '}
+                        {backup.reason === 'cloud' ? '应用云端存档前' : '恢复本机快照前'}
+                      </ItemTitle>
+                    </ItemContent>
+                    <ItemActions>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button variant="outline" disabled={busy}>
+                            恢复配置
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>恢复这份本机配置快照？</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              会完整覆盖当前供应商和通用模板（含 API
+                              Key），不合并当前变更；不会写入工具配置文件。
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>取消</AlertDialogCancel>
+                            <AlertDialogAction
+                              onClick={() => onRestoreConfigurationBackup(backup.id)}
+                            >
+                              确认恢复
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </ItemActions>
+                  </Item>
+                ))}
+              </ItemGroup>
+            </div>
+          )}
           {backups.length === 0 ? (
             <Empty className="border bg-card py-10">
               <EmptyHeader>
@@ -347,13 +398,17 @@ function BackupRow({
           </Badge>
           <span className="text-xs text-muted-foreground">{formatDate(backup.createdAt)}</span>
         </ItemTitle>
-        <ItemDescription className="truncate text-xs" title={backup.targetPath}>
-          {backup.reason === 'template' ? '共用模板' : (backup.providerName ?? '外部或未匹配配置')}{' '}
-          · {backup.targetPath}
+        <ItemDescription
+          className="truncate text-xs"
+          title={backup.reason === 'template' ? '应用内共用模板' : backup.targetPath}
+        >
+          {backup.reason === 'template'
+            ? '应用内共用模板'
+            : `${backup.providerName ?? '外部或未匹配配置'} · ${backup.targetPath}`}
         </ItemDescription>
         {backup.relatedPaths.length > 0 && (
-          <ItemDescription className="truncate text-xs" title={backup.relatedPaths.join('、')}>
-            关联文件：{backup.relatedPaths.join('、')}
+          <ItemDescription className="truncate text-xs">
+            包含关联的共通模板和字段接管状态
           </ItemDescription>
         )}
       </ItemContent>

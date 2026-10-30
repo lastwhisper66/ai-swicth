@@ -10,7 +10,11 @@ export const IPC_CHANNELS = {
   testCloudBackup: 'cloud-backup:test',
   uploadCloudBackup: 'cloud-backup:upload',
   restoreCloudBackup: 'cloud-backup:restore',
+  listCloudBackups: 'cloud-backup:list',
+  restoreConfigurationBackup: 'configurations:restore-backup',
   setNativeTheme: 'app:set-native-theme',
+  initializeTheme: 'app:initialize-theme',
+  saveTheme: 'app:save-theme',
   getWindowState: 'window:get-state',
   minimizeWindow: 'window:minimize',
   toggleMaximizeWindow: 'window:toggle-maximize',
@@ -205,7 +209,6 @@ export interface CommonConfigInput {
 export interface CommonConfig {
   toolId: ToolId
   content: string
-  templatePath: string
   source: 'saved' | 'current' | 'empty'
   revision: string
   conflicts: string[]
@@ -262,6 +265,7 @@ export interface AppSnapshot {
   providers: ProviderSummary[]
   tools: Record<ToolId, ToolStatus>
   backups: BackupSummary[]
+  configurationBackups: ConfigurationBackupSummary[]
 }
 
 export interface ApplyProviderInput {
@@ -292,6 +296,19 @@ export interface RestoreResult {
 
 export interface CloudBackupOperationInput {
   encryptionPassword: string
+  objectKey?: string
+}
+
+export interface CloudBackupSummary {
+  objectKey: string
+  createdAt: string
+  current: boolean
+}
+
+export interface ConfigurationBackupSummary {
+  id: string
+  createdAt: string
+  reason: 'cloud' | 'restore' | 'migration'
 }
 
 export interface CloudBackupOperationResult {
@@ -384,7 +401,11 @@ export interface DesktopApi {
   restoreCloudBackup: (
     input: CloudBackupOperationInput
   ) => Promise<ApiResult<OperationResponse<CloudBackupOperationResult>>>
+  listCloudBackups: () => Promise<ApiResult<CloudBackupSummary[]>>
+  restoreConfigurationBackup: (input: RestoreBackupInput) => Promise<ApiResult<AppSnapshot>>
   setNativeTheme: (input: SetNativeThemeInput) => Promise<ApiResult<void>>
+  initializeTheme: (input: { legacyTheme?: AppTheme }) => Promise<ApiResult<AppTheme>>
+  saveTheme: (input: SetNativeThemeInput) => Promise<ApiResult<void>>
   createProvider: (input: CreateProviderInput) => Promise<ApiResult<AppSnapshot>>
   updateProvider: (input: UpdateProviderInput) => Promise<ApiResult<AppSnapshot>>
   getProviderSecrets: (input: GetProviderSecretsInput) => Promise<ApiResult<ProviderSecrets>>

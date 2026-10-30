@@ -1,11 +1,13 @@
 import { app } from 'electron'
 import type {
   AppSnapshot,
+  AppTheme,
   AppSettingsInput,
   CloudBackupOperationInput,
   CloudBackupOperationResult,
   CloudBackupConnectionResult,
   CloudBackupSettingsInput,
+  CloudBackupSummary,
   ApplyProviderInput,
   ApplyResult,
   CreateProviderInput,
@@ -51,17 +53,19 @@ export class AppController {
   ) {}
 
   async getSnapshot(refreshInstallations = false): Promise<AppSnapshot> {
-    const [providers, tools, backups] = await Promise.all([
+    const [providers, tools, backups, configurationBackups] = await Promise.all([
       this.providerStore.list(),
       this.toolStatusService.getAll(refreshInstallations),
-      this.backupService.list()
+      this.backupService.list(),
+      this.cloudBackup.listLocalBackups()
     ])
     return {
       appInfo: { name: app.getName(), version: app.getVersion() },
       settings: this.appSettings.get(),
       providers,
       tools,
-      backups
+      backups,
+      configurationBackups
     }
   }
 
@@ -70,6 +74,14 @@ export class AppController {
       await this.appSettings.set(input)
       return this.getSnapshot()
     })
+  }
+
+  initializeTheme(legacyTheme?: AppTheme): AppTheme {
+    return this.appSettings.getTheme(legacyTheme)
+  }
+
+  saveTheme(theme: AppTheme): void {
+    this.appSettings.setTheme(theme)
   }
 
   async setCloudBackupSettings(input: CloudBackupSettingsInput): Promise<AppSnapshot> {
@@ -114,9 +126,20 @@ export class AppController {
     return this.withMutation(async () => {
       await this.appSettings.setCloudBackupPassword(input.encryptionPassword)
       return {
-        operation: await this.cloudBackup.restore(input.encryptionPassword),
+        operation: await this.cloudBackup.restore(input.encryptionPassword, input.objectKey),
         snapshot: await this.getSnapshot()
       }
+    })
+  }
+
+  async listCloudBackups(): Promise<CloudBackupSummary[]> {
+    return this.cloudBackup.list()
+  }
+
+  async restoreConfigurationBackup(input: RestoreBackupInput): Promise<AppSnapshot> {
+    return this.withMutation(async () => {
+      await this.cloudBackup.restoreLocal(input.backupId)
+      return this.getSnapshot()
     })
   }
 

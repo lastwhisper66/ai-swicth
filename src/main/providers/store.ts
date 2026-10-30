@@ -15,11 +15,9 @@ import {
   type HeaderValue
 } from '@shared/configuration'
 import { AppError } from '../errors'
-import { readOptionalText, writeTextAtomic } from '../utils/files'
+import type { AppDatabase } from '../database'
 import { validateConfigurations } from './configuration-validation'
 import { maskApiKey } from '../utils/api-key'
-
-const STORAGE_VERSION = 3
 
 export interface PortableProvider {
   id: string
@@ -34,12 +32,11 @@ export interface PortableProvider {
 
 export type ResolvedProvider = PortableProvider
 interface ProviderDocument {
-  version: number
   providers: PortableProvider[]
 }
 
 export class ProviderStore {
-  constructor(private readonly filePath: string) {}
+  constructor(private readonly database: AppDatabase) {}
 
   async list(): Promise<ProviderSummary[]> {
     return (await this.load()).providers
@@ -129,8 +126,16 @@ export class ProviderStore {
     return (await this.load()).providers
   }
 
+  exportPortableSync(): PortableProvider[] {
+    return decodeDocument({ providers: this.database.readProviders() }).providers
+  }
+
+  replacePortable(providers: unknown[]): void {
+    this.database.replaceProviders(this.validatePortable(providers))
+  }
+
   async importPortable(providers: unknown[]): Promise<void> {
-    await this.save({ version: STORAGE_VERSION, providers: this.validatePortable(providers) })
+    await this.save({ providers: this.validatePortable(providers) })
   }
 
   validatePortable(providers: unknown[]): PortableProvider[] {
@@ -139,27 +144,25 @@ export class ProviderStore {
   }
 
   private async load(): Promise<ProviderDocument> {
-    const content = await readOptionalText(this.filePath)
-    if (content === null) return { version: STORAGE_VERSION, providers: [] }
     try {
-      return decodeDocument(JSON.parse(content))
+      return this.database.readTransaction(() => ({ providers: this.exportPortableSync() }))
     } catch {
       throw new AppError(
         'STORAGE_CORRUPTED',
-        '供应商数据无法读取或版本不受支持，原文件未修改。请检查应用数据目录。'
+        '供应商数据无法读取，原文件未修改。请检查应用数据目录。'
       )
     }
   }
 
   private async save(document: ProviderDocument): Promise<void> {
-    await writeTextAtomic(this.filePath, `${JSON.stringify(document, null, 2)}\n`, true)
+    this.database.replaceProviders(document.providers)
   }
 }
 
-function decodeDocument(value: unknown): ProviderDocument {
+export function decodeDocument(value: unknown): ProviderDocument {
   if (
     !isObject(value) ||
-    ![1, 2, STORAGE_VERSION].includes(value.version as number) ||
+    (value.version !== undefined && ![1, 2, 3].includes(value.version as number)) ||
     !Array.isArray(value.providers)
   )
     throw new Error('Invalid provider document')
@@ -170,7 +173,7 @@ function decodeDocument(value: unknown): ProviderDocument {
       throw new Error('Invalid record')
     const basic = validateBasic(
       raw,
-      value.version === STORAGE_VERSION ? PROVIDER_TOOL_IDS : TOOL_IDS
+      value.version === undefined || value.version === 3 ? PROVIDER_TOOL_IDS : TOOL_IDS
     )
     if (originals.some((provider) => provider.id === raw.id)) throw new Error('Duplicate ID')
     assertUnique(originals, basic.name, basic.tools)
@@ -232,7 +235,7 @@ function decodeDocument(value: unknown): ProviderDocument {
   }
   if (new Set(providers.map((provider) => provider.id)).size !== providers.length)
     throw new Error('Duplicate ID')
-  return { version: STORAGE_VERSION, providers }
+  return { providers }
 }
 
 function validateBasic<T extends ToolId>(

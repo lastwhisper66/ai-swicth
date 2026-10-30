@@ -5,13 +5,10 @@ import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import type { ToolId, ToolPathSource } from '@shared/ipc'
 import { TOOL_IDS } from '@shared/ipc'
 import { AppError } from '../errors'
-import { readOptionalText, writeTextAtomic } from '../utils/files'
+import type { AppDatabase } from '../database'
 import { parseWslPath, WslService } from './wsl'
 
-const SETTINGS_VERSION = 2
-
 interface PathSettingsDocument {
-  version: number
   paths: Partial<Record<ToolId, string>>
 }
 
@@ -25,7 +22,7 @@ export interface ResolvedToolPath {
 
 export class PathSettingsStore {
   constructor(
-    private readonly filePath: string,
+    private readonly database: AppDatabase,
     private readonly wsl: WslService
   ) {}
 
@@ -127,19 +124,11 @@ export class PathSettingsStore {
   }
 
   private async load(): Promise<PathSettingsDocument> {
-    const content = await readOptionalText(this.filePath)
-    if (content === null) return { version: SETTINGS_VERSION, paths: {} }
-
     try {
-      const value: unknown = JSON.parse(content)
-      if (!isPathSettingsDocument(value)) throw new Error('Invalid path settings')
-      if (value.version === 1) {
-        value.paths = Object.fromEntries(
-          Object.entries(value.paths).map(([toolId, filePath]) => [toolId, dirname(filePath)])
-        )
-        value.version = SETTINGS_VERSION
-      }
-      return value
+      const rows = this.database.sql
+        .prepare('SELECT tool_id, path FROM tool_paths')
+        .all() as Array<{ tool_id: ToolId; path: string }>
+      return decodePathSettings({ paths: Object.fromEntries(rows.map((r) => [r.tool_id, r.path])) })
     } catch {
       throw new AppError(
         'STORAGE_CORRUPTED',
@@ -149,7 +138,11 @@ export class PathSettingsStore {
   }
 
   private async save(document: PathSettingsDocument): Promise<void> {
-    await writeTextAtomic(this.filePath, `${JSON.stringify(document, null, 2)}\n`, true)
+    this.database.transaction(() => {
+      this.database.sql.prepare('DELETE FROM tool_paths').run()
+      const insert = this.database.sql.prepare('INSERT INTO tool_paths VALUES (?, ?)')
+      for (const [id, path] of Object.entries(document.paths)) insert.run(id, path)
+    })
   }
 }
 
@@ -189,29 +182,30 @@ function resolveToolPath(
   }
 }
 
-function isPathSettingsDocument(value: unknown): value is PathSettingsDocument {
+export function decodePathSettings(value: unknown): PathSettingsDocument {
   if (
     !isRecord(value) ||
-    ![1, SETTINGS_VERSION].includes(value.version as number) ||
+    (value.version !== undefined && value.version !== 1 && value.version !== 2) ||
     !isRecord(value.paths)
   ) {
-    return false
+    throw new Error('Invalid path settings')
   }
 
-  return Object.entries(value.paths).every(([toolId, filePath]) => {
+  const paths: PathSettingsDocument['paths'] = {}
+  for (const [toolId, filePath] of Object.entries(value.paths)) {
     if (
       !TOOL_IDS.includes(toolId as ToolId) ||
       typeof filePath !== 'string' ||
       !isAbsolute(filePath)
     ) {
-      return false
+      throw new Error('Invalid path settings')
     }
     const expectedExtension = baseToolId(toolId as ToolId) === 'claude-code' ? '.json' : '.toml'
-    return (
-      value.version === SETTINGS_VERSION ||
-      extname(filePath).toLocaleLowerCase() === expectedExtension
-    )
-  })
+    if (value.version === 1 && extname(filePath).toLocaleLowerCase() !== expectedExtension)
+      throw new Error('Invalid legacy path settings')
+    paths[toolId as ToolId] = value.version === 1 ? dirname(filePath) : filePath
+  }
+  return { paths }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

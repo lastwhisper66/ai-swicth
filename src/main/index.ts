@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Menu, nativeImage, Tray } from 'electron'
+import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Tray } from 'electron'
 import { join, resolve } from 'path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -18,6 +18,10 @@ import { AppSettingsStore } from './services/app-settings'
 import { CloudBackupService } from './services/cloud-backup'
 import { ToolInstallationService } from './services/tool-installation'
 import { ManagedStateStore } from './services/managed-state'
+import { ConfigurationArchiveStore } from './services/configuration-archives'
+import { runAppMigrations } from './migrations'
+import { AppDatabase } from './database'
+import { ConfigurationTargets } from './database/configuration-targets'
 import { toApiError } from './errors'
 import icon from '../../resources/icon.png?asset'
 import windowsIcon from '../../resources/icon.ico?asset'
@@ -31,7 +35,8 @@ const rendererUrl =
     ? new URL(process.env['ELECTRON_RENDERER_URL']).href
     : pathToFileURL(join(__dirname, '../renderer/index.html')).href
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
-const appSettings = new AppSettingsStore(join(app.getPath('userData'), 'preferences.v1.json'))
+let database: AppDatabase | null = null
+let appSettings: AppSettingsStore | null = null
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
@@ -56,6 +61,8 @@ app.on('before-quit', () => {
   isQuitting = true
 })
 app.on('will-quit', () => {
+  database?.close()
+  database = null
   tray?.destroy()
   tray = null
 })
@@ -95,7 +102,7 @@ function createWindow(): void {
   window.on('close', (event) => {
     if (isQuitting) return
     event.preventDefault()
-    if (appSettings.get().closeBehavior === 'tray' && tray && !tray.isDestroyed()) {
+    if (appSettings?.get().closeBehavior === 'tray' && tray && !tray.isDestroyed()) {
       window.hide()
     } else {
       app.quit()
@@ -149,27 +156,39 @@ app.whenReady().then(async () => {
   })
 
   const userDataPath = app.getPath('userData')
+  let targets: ConfigurationTargets
   try {
+    database = new AppDatabase(userDataPath)
+    const unremoved = await runAppMigrations(database)
+    targets = new ConfigurationTargets(database)
+    await targets.recover()
+    if (unremoved.length)
+      dialog.showErrorBox(
+        '旧配置清理未完成',
+        '数据已导入数据库，部分旧 JSON 被占用或发生变化，已保留原文件；应用仅使用 ai-switch.db，不会重复导入。请检查旧文件后重启以重试清理。'
+      )
+    appSettings = new AppSettingsStore(database)
     await appSettings.load()
+    const theme = database.getSetting<unknown>('device_settings', 'theme')
+    if (theme === 'system' || theme === 'light' || theme === 'dark') nativeTheme.themeSource = theme
   } catch (error) {
-    dialog.showErrorBox('无法读取应用设置', toApiError(error).message)
+    dialog.showErrorBox('无法打开或迁移本地数据', toApiError(error).message)
+    app.quit()
+    return
   }
-  const providerStore = new ProviderStore(join(userDataPath, 'providers.v1.json'))
+  const providerStore = new ProviderStore(database)
   const wsl = new WslService()
-  const pathSettings = new PathSettingsStore(join(userDataPath, 'settings.v1.json'), wsl)
-  const commonConfigs = new CommonConfigStore(userDataPath)
-  const managedStates = new ManagedStateStore(userDataPath)
+  const pathSettings = new PathSettingsStore(database, wsl)
+  const commonConfigs = new CommonConfigStore(database)
+  const managedStates = new ManagedStateStore(database)
   const installations = new ToolInstallationService(wsl)
-  const backupService = new BackupService(
-    join(userDataPath, 'backups'),
-    commonConfigs,
-    managedStates
-  )
+  const backupService = new BackupService(database, commonConfigs, managedStates)
   const cloudBackupService = new CloudBackupService(
     providerStore,
     commonConfigs,
     appSettings,
-    managedStates
+    new ConfigurationArchiveStore(database),
+    database
   )
   const adapters = {
     'claude-code': new ClaudeCodeAdapter(),
@@ -190,7 +209,9 @@ app.whenReady().then(async () => {
     backupService,
     adapters,
     commonConfigs,
-    managedStates
+    managedStates,
+    database,
+    targets
   )
   const controller = new AppController(
     providerStore,

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type { AppTheme } from '@shared/ipc'
 
@@ -28,9 +28,37 @@ export function ThemeProvider({
   storageKey = 'vite-ui-theme',
   ...props
 }: ThemeProviderProps): React.JSX.Element {
-  const [theme, setTheme] = useState<AppTheme>(
-    () => (localStorage.getItem(storageKey) as AppTheme) || defaultTheme
-  )
+  const [theme, setTheme] = useState<AppTheme>(() => {
+    const legacy = localStorage.getItem(storageKey)
+    return legacy === 'system' || legacy === 'light' || legacy === 'dark' ? legacy : defaultTheme
+  })
+  const initialized = useRef(false)
+  const saveQueue = useRef<Promise<void>>(Promise.resolve())
+
+  useEffect(() => {
+    let active = true
+    const legacy = localStorage.getItem(storageKey)
+    const legacyTheme =
+      legacy === 'system' || legacy === 'light' || legacy === 'dark' ? legacy : undefined
+    void window.api
+      .initializeTheme({ legacyTheme })
+      .then((result) => {
+        if (!active) return
+        if (!result.ok) {
+          toast.error(`无法读取主题：${result.error.message}`)
+          return
+        }
+        localStorage.removeItem(storageKey)
+        initialized.current = true
+        setTheme(result.value)
+      })
+      .catch(() => {
+        if (active) toast.error('无法读取主题，请重新打开应用后重试。')
+      })
+    return () => {
+      active = false
+    }
+  }, [storageKey])
 
   useEffect(() => {
     const root = window.document.documentElement
@@ -78,9 +106,23 @@ export function ThemeProvider({
 
   const value = {
     theme,
-    setTheme: (theme: AppTheme) => {
-      localStorage.setItem(storageKey, theme)
-      setTheme(theme)
+    setTheme: (next: AppTheme) => {
+      saveQueue.current = saveQueue.current
+        .then(async () => {
+          if (!initialized.current) {
+            toast.error('主题尚未读取完成，请重新打开应用后重试。')
+            return
+          }
+          const result = await window.api.saveTheme({ theme: next })
+          if (!result.ok) {
+            toast.error(`主题保存失败：${result.error.message}`)
+            return
+          }
+          setTheme(next)
+        })
+        .catch(() => {
+          toast.error('主题保存失败，请重试。')
+        })
     }
   }
 

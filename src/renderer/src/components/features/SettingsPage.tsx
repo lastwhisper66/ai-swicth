@@ -6,6 +6,7 @@ import type {
   BackupSummary,
   CloudBackupSettings,
   CloudBackupSettingsInput,
+  ConfigurationBackupSummary,
   CloseBehavior,
   OpenToolLocationInput,
   ProviderSummary,
@@ -30,6 +31,7 @@ interface SettingsPageProps {
   providers: ProviderSummary[]
   tools: Record<ToolId, ToolStatus>
   backups: BackupSummary[]
+  configurationBackups: ConfigurationBackupSummary[]
   cloudBackup: CloudBackupSettings
   pendingKey: string | null
   busy: boolean
@@ -49,7 +51,8 @@ interface SettingsPageProps {
   onSaveCloudBackupPassword: (password: string) => Promise<boolean>
   onTestCloudBackup: (input: CloudBackupSettingsInput) => void
   onUploadCloudBackup: (password: string) => void
-  onRestoreCloudBackup: (password: string) => void
+  onRestoreCloudBackup: (password: string, objectKey?: string) => void
+  onRestoreConfigurationBackup: (backupId: string) => void
 }
 
 const items: Array<{
@@ -85,6 +88,7 @@ export function SettingsPage({
   providers,
   tools,
   backups,
+  configurationBackups,
   cloudBackup,
   pendingKey,
   busy,
@@ -104,7 +108,8 @@ export function SettingsPage({
   onSaveCloudBackupPassword,
   onTestCloudBackup,
   onUploadCloudBackup,
-  onRestoreCloudBackup
+  onRestoreCloudBackup,
+  onRestoreConfigurationBackup
 }: SettingsPageProps): React.JSX.Element {
   return (
     <div className="min-w-0 space-y-6">
@@ -166,6 +171,8 @@ export function SettingsPage({
             section={section}
             tools={tools}
             backups={backups}
+            configurationBackups={configurationBackups}
+            onRestoreConfigurationBackup={onRestoreConfigurationBackup}
             cloudBackup={cloudBackup}
             pendingKey={pendingKey}
             busy={busy}

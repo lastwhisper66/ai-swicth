@@ -13,7 +13,7 @@ import {
 import { AppError } from '../errors'
 
 /** Moves only into the explicitly chosen connection and preset, never every provider. */
-export function migrateConfiguration(
+export function moveConfigurationFields(
   toolId: ToolId,
   content: string,
   configuration: ProviderToolConfiguration<HeaderValue>,

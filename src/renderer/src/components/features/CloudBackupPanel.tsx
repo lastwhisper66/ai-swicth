@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Cloud, RefreshCw, Save, Upload, Download } from 'lucide-react'
-import type { CloudBackupSettings, CloudBackupSettingsInput } from '@shared/ipc'
+import type { CloudBackupSettings, CloudBackupSettingsInput, CloudBackupSummary } from '@shared/ipc'
 import { CLOUD_BACKUP_RETENTION } from '@shared/ipc'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import {
@@ -43,7 +43,7 @@ interface CloudBackupPanelProps {
   onSavePassword: (password: string) => Promise<boolean>
   onTest: (input: CloudBackupSettingsInput) => void
   onUpload: (password: string) => void
-  onRestore: (password: string) => void
+  onRestore: (password: string, objectKey?: string) => void
 }
 
 const readCloudBackupSecret = (): ReturnType<typeof window.api.getCloudBackupSecret> =>
@@ -77,6 +77,56 @@ export function CloudBackupPanel({
   const [passwordDraft, setPasswordDraft] = useState<string | null>(null)
   const password = passwordDraft ?? settings.encryptionPassword
   const passwordSaveTimer = useRef<number | undefined>(undefined)
+  const [archives, setArchives] = useState<CloudBackupSummary[]>([])
+  const [selectedArchive, setSelectedArchive] = useState('')
+  const [archiveError, setArchiveError] = useState<string | null>(null)
+  const [loadingArchives, setLoadingArchives] = useState(false)
+  const [archiveRefresh, setArchiveRefresh] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    if (!settings.enabled || busy) return
+    void Promise.resolve()
+      .then(() => {
+        if (!active) return null
+        setLoadingArchives(true)
+        setArchiveError(null)
+        return window.api.listCloudBackups()
+      })
+      .then((result) => {
+        if (!active || !result) return
+        if (!result.ok) {
+          setArchiveError(result.error.message)
+          return
+        }
+        setArchives(result.value)
+        setSelectedArchive((previous) =>
+          result.value.some((item) => item.objectKey === previous)
+            ? previous
+            : (result.value[0]?.objectKey ?? '')
+        )
+      })
+      .catch(() => {
+        if (active) setArchiveError('无法读取云端存档，请检查连接后刷新。')
+      })
+      .finally(() => {
+        if (active) setLoadingArchives(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [
+    settings.enabled,
+    settings.endpoint,
+    settings.region,
+    settings.bucket,
+    settings.prefix,
+    settings.accessKeyId,
+    settings.hasSecret,
+    settings.maskedSecret,
+    busy,
+    archiveRefresh
+  ])
 
   const settingsDirty =
     enabled !== settings.enabled ||
@@ -376,30 +426,74 @@ export function CloudBackupPanel({
           ) : (
             <Upload aria-hidden="true" />
           )}
-          加密上传当前配置
+          保存到云端
         </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        保存会用本地供应商和通用配置完整覆盖云端当前存档（含 API Key），不会合并云端内容。
+      </p>
+      <Field>
+        <FieldLabel htmlFor="cloud-archive">选择云端存档</FieldLabel>
+        <div className="flex gap-2">
+          <Select
+            value={selectedArchive}
+            onValueChange={(value) => setSelectedArchive(value ?? '')}
+            disabled={
+              busy || settingsDirty || !settings.enabled || loadingArchives || archives.length === 0
+            }
+          >
+            <SelectTrigger id="cloud-archive" className="min-w-0 flex-1">
+              <SelectValue placeholder={loadingArchives ? '正在读取存档…' : '云端暂无存档'} />
+            </SelectTrigger>
+            <SelectContent>
+              {archives.map((item) => (
+                <SelectItem key={item.objectKey} value={item.objectKey}>
+                  {item.current ? '当前存档' : '历史存档'} ·{' '}
+                  {new Date(item.createdAt).toLocaleString('zh-CN')}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy || loadingArchives || settingsDirty || !settings.enabled}
+            onClick={() => setArchiveRefresh((value) => value + 1)}
+          >
+            刷新存档
+          </Button>
+        </div>
+        {archiveError && <FieldError>{archiveError}</FieldError>}
+      </Field>
+      <div className="flex flex-wrap gap-2">
         <AlertDialog>
           <AlertDialogTrigger asChild>
-            <Button type="button" variant="outline" disabled={!canOperate}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!canOperate || loadingArchives || Boolean(archiveError) || !selectedArchive}
+            >
               {pendingKey === 'cloud:restore' ? (
                 <Spinner aria-hidden="true" />
               ) : (
                 <Download aria-hidden="true" />
               )}
-              从云端恢复配置
+              应用云端版本
             </Button>
           </AlertDialogTrigger>
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>从云端覆盖本机配置？</AlertDialogTitle>
               <AlertDialogDescription>
-                会使用最新一份云端备份替换本机供应商库和两个工具的共通配置，不会修改 Claude Code 或
-                Codex 的实际配置文件。确认前请确保备份密码正确。
+                会使用选定存档完整覆盖本机供应商、API Key 和两个工具的通用模板，本地变更不保留。
+                覆盖前会创建可恢复的本机快照；不会修改 Claude Code 或 Codex 的实际配置文件。
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>取消</AlertDialogCancel>
-              <AlertDialogAction onClick={() => onRestore(password)}>确认恢复</AlertDialogAction>
+              <AlertDialogAction onClick={() => onRestore(password, selectedArchive)}>
+                确认覆盖
+              </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

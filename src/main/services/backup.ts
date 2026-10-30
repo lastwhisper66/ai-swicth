@@ -7,8 +7,8 @@ import { AppError } from '../errors'
 import { hashContent, readOptionalText, writeTextAtomic } from '../utils/files'
 import type { CommonConfigStore } from './common-config'
 import type { ManagedStateStore } from './managed-state'
+import { parseRecordReference, type AppDatabase } from '../database'
 
-const BACKUP_VERSION = 1
 const MAX_BACKUPS_PER_TOOL = 20
 
 interface BackupRecord extends BackupSummary {
@@ -23,7 +23,6 @@ interface BackupFileRecord {
 }
 
 interface BackupIndexDocument {
-  version: number
   backups: BackupRecord[]
 }
 
@@ -48,7 +47,7 @@ export class BackupService {
   private lock: Promise<void> = Promise.resolve()
 
   constructor(
-    private readonly rootPath: string,
+    private readonly database: AppDatabase,
     private readonly commonConfigs: CommonConfigStore,
     private readonly managedStates: ManagedStateStore
   ) {}
@@ -66,7 +65,7 @@ export class BackupService {
     return this.withLock(async () => {
       if (
         input.reason === 'template' &&
-        (input.targetPath !== this.commonConfigs.getPath(input.toolId) ||
+        (input.targetPath !== this.commonConfigs.getReference(input.toolId) ||
           input.additionalFiles?.length)
       )
         throw new AppError('INVALID_INPUT', '共通模板备份只能包含应用中的共用模板。')
@@ -95,13 +94,15 @@ export class BackupService {
 
       if (input.content !== null || input.additionalFiles?.some((file) => file.content !== null)) {
         const payload = JSON.stringify({
-          version: 2,
           content: input.content,
           additionalContents: Object.fromEntries(
             (input.additionalFiles ?? []).map((file) => [file.path, file.content])
           )
         })
-        await writeTextAtomic(this.getPayloadPath(record), payload, true)
+        const payloadPath = this.getPayloadPath(record)
+        await writeTextAtomic(payloadPath, payload, true)
+        if ((await readOptionalText(payloadPath)) !== payload)
+          throw new AppError('WRITE_FAILED', '备份正文写入后校验失败，未修改配置。')
       }
 
       document.backups.push(record)
@@ -161,7 +162,15 @@ export class BackupService {
     const additionalFiles = (record.additionalFiles ?? [])
       .filter((file) => this.isRelatedPath(record.toolId, file.path))
       .map((file) => ({ ...file, path: this.restoredPath(record.toolId, file.path) }))
-    return { ...record, additionalFiles, relatedPaths: additionalFiles.map((file) => file.path) }
+    return {
+      ...record,
+      targetPath:
+        record.reason === 'template'
+          ? this.restoredPath(record.toolId, record.targetPath)
+          : record.targetPath,
+      additionalFiles,
+      relatedPaths: additionalFiles.map((file) => file.path)
+    }
   }
 
   private getRestorablePayload(
@@ -176,10 +185,15 @@ export class BackupService {
       files.map((file) => {
         const original = additionalContents[file.path] ?? null
         const path = this.restoredPath(record.toolId, file.path)
-        return [path, path === file.path ? original : this.commonConfigs.encode(original)]
+        return [path, this.normalizeRelatedContent(record.toolId, file.path, original)]
       })
     )
     const restorable = this.getRestorableRecord(record)
+    if (record.reason === 'template') {
+      content = this.normalizeRelatedContent(record.toolId, record.targetPath, content)
+      restorable.checksum = hashContent(content)
+      restorable.originalFileExisted = content !== null
+    }
     restorable.additionalFiles = restorable.additionalFiles?.map((file) => ({
       ...file,
       checksum: hashContent(contents[file.path] ?? null),
@@ -193,13 +207,10 @@ export class BackupService {
   }
 
   private async loadIndex(): Promise<BackupIndexDocument> {
-    const content = await readOptionalText(this.getIndexPath())
-    if (content === null) return { version: BACKUP_VERSION, backups: [] }
-
     try {
-      const value: unknown = JSON.parse(content)
-      if (!isBackupIndexDocument(value)) throw new Error('Invalid backup index')
-      return value
+      return decodeBackupIndex({
+        backups: this.database.listBackups('tool').map((row) => row.document)
+      })
     } catch {
       throw new AppError(
         'STORAGE_CORRUPTED',
@@ -209,29 +220,61 @@ export class BackupService {
   }
 
   private async saveIndex(document: BackupIndexDocument): Promise<void> {
-    await writeTextAtomic(this.getIndexPath(), `${JSON.stringify(document, null, 2)}\n`, true)
-  }
-
-  private getIndexPath(): string {
-    return join(this.rootPath, 'index.v1.json')
+    this.database.transaction(() => {
+      this.database.sql.prepare("DELETE FROM backup_records WHERE kind = 'tool'").run()
+      for (const record of document.backups)
+        this.database.putBackup({
+          id: record.id,
+          kind: 'tool',
+          createdAt: record.createdAt,
+          toolId: record.toolId,
+          path: this.getPayloadPath(record),
+          document: record
+        })
+    })
   }
 
   private isRelatedPath(toolId: ToolId, path: string): boolean {
+    const root = this.database.rootPath
     return (
-      path === this.commonConfigs.getPath(toolId) ||
+      path === this.commonConfigs.getReference(toolId) ||
       path === this.commonConfigs.getLegacyPath(toolId) ||
-      path === this.managedStates.getPath(toolId)
+      path === this.managedStates.getReference(toolId) ||
+      path === join(root, `${toolId.replace(/-wsl$/u, '')}.common.json`) ||
+      path === join(root, `${toolId}.managed.json`) ||
+      path === join(root, `${toolId.replace(/-wsl$/u, '')}.common.v2.json`) ||
+      path === join(root, `${toolId}.managed.v1.json`)
     )
   }
 
   private restoredPath(toolId: ToolId, path: string): string {
-    return path === this.commonConfigs.getLegacyPath(toolId)
-      ? this.commonConfigs.getPath(toolId)
-      : path
+    if (path === this.managedStates.getReference(toolId) || /\.managed(?:\.v1)?\.json$/u.test(path))
+      return this.managedStates.getReference(toolId)
+    if (path === this.commonConfigs.getReference(toolId) || /\.common(?:\.v2)?\.json$/u.test(path))
+      return this.commonConfigs.getReference(toolId)
+    return path
+  }
+
+  private normalizeRelatedContent(
+    toolId: ToolId,
+    path: string,
+    content: string | null
+  ): string | null {
+    if (this.restoredPath(toolId, path) === this.managedStates.getReference(toolId)) {
+      const state = this.managedStates.decode(content)
+      return state === null ? null : this.managedStates.encode(state)
+    }
+    if (content === null) return null
+    try {
+      return this.commonConfigs.encode(this.commonConfigs.decode(content))
+    } catch {
+      // The earliest backups contain raw JSON/TOML templates.
+      return this.commonConfigs.encode(content)
+    }
   }
 
   private getPayloadPath(record: Pick<BackupRecord, 'id' | 'toolId'>): string {
-    return join(this.rootPath, record.toolId, `${record.id}.backup`)
+    return join(this.database.rootPath, 'backups', record.toolId, `${record.id}.backup`)
   }
 
   private async withLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -280,11 +323,16 @@ function toSummary(record: BackupRecord): BackupSummary {
   }
 }
 
-function isBackupIndexDocument(value: unknown): value is BackupIndexDocument {
-  if (!isRecord(value) || value.version !== BACKUP_VERSION || !Array.isArray(value.backups)) {
-    return false
+export function decodeBackupIndex(value: unknown): BackupIndexDocument {
+  if (
+    !isRecord(value) ||
+    (value.version !== undefined && value.version !== 1) ||
+    !Array.isArray(value.backups)
+  ) {
+    throw new Error('Invalid backup index')
   }
-  return value.backups.every(isBackupRecord)
+  if (!value.backups.every(isBackupRecord)) throw new Error('Invalid backup record')
+  return { backups: value.backups }
 }
 
 function isBackupRecord(value: unknown): value is BackupRecord {
@@ -295,7 +343,7 @@ function isBackupRecord(value: unknown): value is BackupRecord {
     TOOL_IDS.includes(value.toolId as ToolId) &&
     isIsoDate(value.createdAt) &&
     typeof value.targetPath === 'string' &&
-    isAbsolute(value.targetPath) &&
+    (isAbsolute(value.targetPath) || value.targetPath === `template:${value.toolId}`) &&
     (isUuid(value.providerId) || value.providerId === null) &&
     (typeof value.providerName === 'string' || value.providerName === null) &&
     (value.reason === 'apply' ||
@@ -305,7 +353,9 @@ function isBackupRecord(value: unknown): value is BackupRecord {
     typeof value.originalFileExisted === 'boolean' &&
     (value.relatedPaths === undefined ||
       (Array.isArray(value.relatedPaths) &&
-        value.relatedPaths.every((path) => typeof path === 'string' && isAbsolute(path)))) &&
+        value.relatedPaths.every(
+          (path) => typeof path === 'string' && (isAbsolute(path) || parseRecordReference(path))
+        ))) &&
     typeof value.checksum === 'string' &&
     /^[0-9a-f]{64}$/u.test(value.checksum) &&
     (value.additionalFiles === undefined ||
@@ -317,7 +367,7 @@ function isBackupFileRecord(value: unknown): value is BackupFileRecord {
   return (
     isRecord(value) &&
     typeof value.path === 'string' &&
-    isAbsolute(value.path) &&
+    (isAbsolute(value.path) || parseRecordReference(value.path) !== null) &&
     typeof value.originalFileExisted === 'boolean' &&
     typeof value.checksum === 'string' &&
     /^[0-9a-f]{64}$/u.test(value.checksum)
@@ -330,7 +380,11 @@ function parsePayload(
 ): { content: string | null; additionalContents: Record<string, string | null> } {
   try {
     const value: unknown = JSON.parse(decrypted)
-    if (isRecord(value) && value.version === 2 && isRecord(value.additionalContents)) {
+    if (
+      isRecord(value) &&
+      (value.version === undefined || value.version === 2) &&
+      isRecord(value.additionalContents)
+    ) {
       if (typeof value.content !== 'string' && value.content !== null)
         throw new Error('Invalid content')
       const additionalContents: Record<string, string | null> = {}

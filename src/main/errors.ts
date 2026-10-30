@@ -32,6 +32,29 @@ export function toApiError(error: unknown): ApiError {
     }
   }
 
+  if (isFileSystemError(error)) {
+    if (error.code === 'SQLITE_BUSY' || error.code === 'SQLITE_LOCKED')
+      return {
+        code: 'WRITE_FAILED',
+        message: '数据库被其他进程占用，请关闭占用 ai-switch.db 的程序后重试。'
+      }
+    if (error.code === 'SQLITE_CORRUPT' || error.code === 'SQLITE_NOTADB')
+      return {
+        code: 'STORAGE_CORRUPTED',
+        message: 'ai-switch.db 无法读取，请从本机数据库备份恢复。'
+      }
+    if (
+      error.code === 'SQLITE_FULL' ||
+      error.code === 'SQLITE_READONLY' ||
+      error.code === 'SQLITE_CANTOPEN' ||
+      error.code?.startsWith('SQLITE_IOERR')
+    )
+      return {
+        code: 'WRITE_FAILED',
+        message: '数据库无法读写，请检查应用数据目录权限和磁盘空间后重试。'
+      }
+  }
+
   return {
     code: 'UNKNOWN',
     message: '本地操作失败，请重试；如果问题持续，请重新打开应用。'

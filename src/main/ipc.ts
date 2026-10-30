@@ -115,6 +115,15 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
     parseCloudBackupOperation,
     (input) => controller.restoreCloudBackup(input)
   )
+  registerBusinessHandler(IPC_CHANNELS.listCloudBackups, rendererUrl, expectNoArguments, () =>
+    controller.listCloudBackups()
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.restoreConfigurationBackup,
+    rendererUrl,
+    parseRestoreBackup,
+    (input) => controller.restoreConfigurationBackup(input)
+  )
   registerBusinessHandler(
     IPC_CHANNELS.setNativeTheme,
     rendererUrl,
@@ -123,6 +132,28 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
       nativeTheme.themeSource = input.theme
     }
   )
+  registerBusinessHandler(
+    IPC_CHANNELS.initializeTheme,
+    rendererUrl,
+    (args) => {
+      const input = expectRecordArgument(args)
+      if (
+        input.legacyTheme !== undefined &&
+        !['system', 'light', 'dark'].includes(input.legacyTheme as string)
+      )
+        throw new AppError('INVALID_INPUT', '旧主题设置无效。')
+      return input.legacyTheme as SetNativeThemeInput['theme'] | undefined
+    },
+    async (legacyTheme) => {
+      const theme = controller.initializeTheme(legacyTheme)
+      nativeTheme.themeSource = theme
+      return theme
+    }
+  )
+  registerBusinessHandler(IPC_CHANNELS.saveTheme, rendererUrl, parseNativeTheme, async (input) => {
+    controller.saveTheme(input.theme)
+    nativeTheme.themeSource = input.theme
+  })
   registerBusinessHandler(IPC_CHANNELS.createProvider, rendererUrl, parseCreateProvider, (input) =>
     controller.createProvider(input)
   )
@@ -290,7 +321,10 @@ function parseCloudBackupSettings(args: unknown[]): CloudBackupSettingsInput {
 
 function parseCloudBackupOperation(args: unknown[]): CloudBackupOperationInput {
   const input = expectRecordArgument(args)
-  return { encryptionPassword: expectString(input.encryptionPassword, 256) }
+  return {
+    encryptionPassword: expectString(input.encryptionPassword, 256),
+    ...(input.objectKey === undefined ? {} : { objectKey: expectString(input.objectKey, 2048) })
+  }
 }
 
 function parseNativeTheme(args: unknown[]): SetNativeThemeInput {
