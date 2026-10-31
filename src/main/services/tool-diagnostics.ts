@@ -1,6 +1,7 @@
 import { stripVTControlCharacters } from 'node:util'
 import { baseToolId, type ToolId } from '@shared/ipc'
 import { isObject } from '@shared/configuration'
+import { getApplicationDefinition, type ApplicationId } from '@shared/applications'
 
 export interface CliCommandResult {
   stdout: string
@@ -9,6 +10,16 @@ export interface CliCommandResult {
 
 export interface ToolDiagnosis {
   version: string
+}
+
+export function parseToolVersion(
+  applicationId: ApplicationId,
+  output: string
+): ToolDiagnosis | null {
+  const content = stripVTControlCharacters(output).trim()
+  const pattern = getApplicationDefinition(applicationId).versionPattern
+  const version = pattern.exec(content)?.[1]
+  return version ? { version } : null
 }
 
 export function doctorArguments(toolId: ToolId): string[] {

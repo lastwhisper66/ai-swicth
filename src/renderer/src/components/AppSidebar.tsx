@@ -1,20 +1,26 @@
 import { TOOL_IDS, TOOL_NAMES } from '@shared/ipc'
-import { Settings } from 'lucide-react'
+import { AppWindow, Settings } from 'lucide-react'
 import type { ToolId } from '@shared/ipc'
 import { ToolIcon } from '@renderer/components/ToolIcon'
 import { Button } from '@renderer/components/ui/button'
 
 interface AppSidebarProps {
-  view: ToolId | 'settings'
+  view: ToolId | 'settings' | 'applications'
+  visible: Record<ToolId, boolean>
   busy: boolean
-  onViewChange: (view: ToolId | 'settings') => void
+  onViewChange: (view: ToolId | 'settings' | 'applications') => void
 }
 
-export function AppSidebar({ view, busy, onViewChange }: AppSidebarProps): React.JSX.Element {
+export function AppSidebar({
+  view,
+  visible,
+  busy,
+  onViewChange
+}: AppSidebarProps): React.JSX.Element {
   return (
     <aside className="flex w-52 shrink-0 flex-col border-r bg-muted/25 lg:w-56">
       <nav className="flex-1 space-y-1 overflow-y-auto p-3" aria-label="工具页面">
-        {TOOL_IDS.map((toolId) => (
+        {TOOL_IDS.filter((toolId) => visible[toolId]).map((toolId) => (
           <Button
             key={toolId}
             type="button"
@@ -30,7 +36,18 @@ export function AppSidebar({ view, busy, onViewChange }: AppSidebarProps): React
         ))}
       </nav>
       <div className="space-y-1 border-t p-3">
-        <nav aria-label="应用设置">
+        <nav aria-label="应用管理与设置" className="space-y-1">
+          <Button
+            type="button"
+            variant={view === 'applications' ? 'secondary' : 'ghost'}
+            className="h-10 w-full justify-start gap-3 px-3"
+            disabled={busy}
+            onClick={() => onViewChange('applications')}
+            aria-current={view === 'applications' ? 'page' : undefined}
+          >
+            <AppWindow aria-hidden="true" />
+            AI 应用
+          </Button>
           <Button
             type="button"
             variant={view === 'settings' ? 'secondary' : 'ghost'}

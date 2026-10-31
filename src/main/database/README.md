@@ -1,6 +1,6 @@
 # 本机 SQLite 存储
 
-主进程通过 `better-sqlite3` 独占管理 `<userData>/ai-switch.db`。供应商、工具连接、模型预设和 Header 使用关联表；通用模板保存原文，灵活选项使用经过领域校验的 JSON 列。主题、关闭行为、S3 连接、密码、工具路径和接管状态仅限本机保存。
+主进程通过 `better-sqlite3` 独占管理 `<userData>/ai-switch.db`。供应商、工具连接、模型预设和 Header 使用关联表；通用模板保存原文，灵活选项使用经过领域校验的 JSON 列。主题、关闭行为、S3 连接、密码、工具路径和接管状态仅限本机保存。AI 应用的侧栏显示开关与各 WSL 发行版的 shell 保存在 `device_settings.applications`，由领域服务校验，不随供应商云备份迁移。旧设置中的 flag 字段被忽略，后续保存只写入 shell，无需数据库迁移。
 
 迁移进度采用 `PRAGMA user_version`，步骤及维护说明在 [`../migrations/`](../migrations/README.md)。启用外键、WAL 和完整同步；短事务内只执行同步数据库操作，不跨越网络请求或异步文件操作。默认模型使用延迟外键，整组替换时一并检查引用。备份和接管状态中的历史供应商 ID 不建立业务外键，避免删除供应商时丢失历史或阻止云端整份覆盖。
 

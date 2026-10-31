@@ -30,6 +30,11 @@ export class PathSettingsStore {
     this.wsl.refresh()
   }
 
+  async getWslDistribution(toolId: ToolId): Promise<string | undefined> {
+    const customPath = (await this.load()).paths[toolId]
+    return customPath ? parseWslPath(customPath).distribution : undefined
+  }
+
   async get(toolId: ToolId): Promise<ResolvedToolPath> {
     const document = await this.load()
     const customPath = document.paths[toolId]

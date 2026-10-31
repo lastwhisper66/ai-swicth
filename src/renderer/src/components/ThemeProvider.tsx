@@ -88,13 +88,13 @@ export function ThemeProvider({
           if (!active) return
           updateTheme()
           if (!result.ok) {
-            toast.error(`无法同步标题栏主题：${result.error.message}`, { id: 'native-theme-sync' })
+            toast.error(`无法同步标题栏主题：${result.error.message}`)
           }
         })
         .catch(() => {
           if (!active) return
           updateTheme()
-          toast.error('无法同步标题栏主题，请再次切换或重新打开应用。', { id: 'native-theme-sync' })
+          toast.error('无法同步标题栏主题，请再次切换或重新打开应用。')
         })
     }
 

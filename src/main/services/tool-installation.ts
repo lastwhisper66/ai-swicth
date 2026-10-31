@@ -1,14 +1,24 @@
-import { baseToolId, isWslTool } from '@shared/ipc'
+import {
+  APPLICATION_INSTANCES,
+  getApplicationDefinition,
+  isWslApplication,
+  type ApplicationId
+} from '@shared/applications'
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
-import type { ToolId, ToolInstallation } from '@shared/ipc'
+import type { ToolInstallation } from '@shared/ipc'
 import { isFileSystemError } from '../errors'
-import { findBundledCodexCli, getCodexCommandDirectories } from './codex-cli-location'
+import { getCodexCommandDirectories } from './codex-cli-location'
 import type { WslService } from './wsl'
-import { doctorArguments, parseToolDoctor, type CliCommandResult } from './tool-diagnostics'
+import {
+  doctorArguments,
+  parseToolDoctor,
+  parseToolVersion,
+  type CliCommandResult
+} from './tool-diagnostics'
 
 const CACHE_DURATION = 30_000
 const DETECTION_TIMEOUT = 20_000
@@ -21,15 +31,23 @@ export class ToolInstallationService {
 
   constructor(private readonly wsl: WslService) {}
 
-  get(toolId: ToolId, refresh = false, distribution?: string): Promise<ToolInstallation> {
-    const key = `${toolId}:${distribution ?? ''}`
+  clear(): void {
+    this.cache.clear()
+  }
+
+  get(
+    applicationId: ApplicationId,
+    refresh = false,
+    distribution?: string
+  ): Promise<ToolInstallation> {
+    const key = `${applicationId}:${distribution ?? ''}`
     const cached = this.cache.get(key)
     if (cached && (!refresh || cached.expiresAt === Infinity) && cached.expiresAt > Date.now()) {
       return cached.result
     }
-    const result = isWslTool(toolId)
-      ? this.wsl.detectInstallation(toolId, distribution!)
-      : detectInstallation(toolId)
+    const result = isWslApplication(applicationId)
+      ? this.wsl.detectInstallation(applicationId, distribution!)
+      : detectInstallation(applicationId)
     const entry = { expiresAt: Infinity, result }
     this.cache.set(key, entry)
     void result.then(
@@ -44,10 +62,11 @@ export class ToolInstallationService {
   }
 }
 
-async function detectInstallation(toolId: ToolId): Promise<ToolInstallation> {
-  const name = baseToolId(toolId) === 'claude-code' ? 'Claude Code' : 'Codex CLI'
-  const command = baseToolId(toolId) === 'claude-code' ? 'claude' : 'codex'
-  const candidates = getSearchDirectories(toolId).flatMap((directory) =>
+async function detectInstallation(applicationId: ApplicationId): Promise<ToolInstallation> {
+  const definition = getApplicationDefinition(applicationId)
+  const { name, command } = definition
+  const configurationToolId = APPLICATION_INSTANCES[applicationId].configurationToolId
+  const candidates = getSearchDirectories(applicationId).flatMap((directory) =>
     (process.platform === 'win32' ? [`${command}.exe`, `${command}.cmd`] : [command]).map(
       (fileName) => join(directory, fileName)
     )
@@ -56,10 +75,7 @@ async function detectInstallation(toolId: ToolId): Promise<ToolInstallation> {
   let firstExecutablePath: string | null = null
   const seen = new Set<string>()
 
-  async function inspectExecutables(
-    paths: string[],
-    bundled = false
-  ): Promise<ToolInstallation | null> {
+  async function inspectExecutables(paths: string[]): Promise<ToolInstallation | null> {
     const locations = await Promise.all(
       paths.map(async (candidate) => {
         try {
@@ -86,18 +102,29 @@ async function detectInstallation(toolId: ToolId): Promise<ToolInstallation> {
       const remaining = deadline - Date.now()
       if (remaining <= 0) break
       try {
-        const result = await runDoctor(
+        const versionResult = await runDoctor(
           executable.path,
-          doctorArguments(toolId),
-          Math.min(12_000, remaining)
+          [...definition.versionArgs],
+          Math.min(8000, remaining)
         )
-        const diagnosis = parseToolDoctor(toolId, result.stdout)
+        let diagnosis =
+          versionResult.exitCode === 0
+            ? parseToolVersion(applicationId, versionResult.stdout)
+            : null
+        if (!diagnosis && configurationToolId) {
+          const result = await runDoctor(
+            executable.path,
+            doctorArguments(configurationToolId),
+            Math.min(8000, Math.max(1000, deadline - Date.now()))
+          )
+          diagnosis = parseToolDoctor(configurationToolId, result.stdout)
+        }
         if (!diagnosis) continue
         return {
           state: 'installed',
           ...diagnosis,
           executablePath: executable.path,
-          message: `${name} 已安装，版本 ${diagnosis.version}${bundled ? '（桌面版内置）' : ''}。`
+          message: `${name} 已安装，版本 ${diagnosis.version}。`
         }
       } catch {
         // A stale launcher must not prevent checking another installation.
@@ -109,28 +136,19 @@ async function detectInstallation(toolId: ToolId): Promise<ToolInstallation> {
   const installation = await inspectExecutables(candidates)
   if (installation) return installation
 
-  if (baseToolId(toolId) === 'codex' && process.platform === 'win32') {
-    try {
-      const bundled = await inspectExecutables(await findBundledCodexCli(), true)
-      if (bundled) return bundled
-    } catch {
-      inaccessible = true
-    }
-  }
-
   return {
     state: firstExecutablePath || inaccessible ? 'unavailable' : 'not-detected',
     version: null,
     executablePath: firstExecutablePath,
     message: firstExecutablePath
-      ? `找到 ${name} 启动文件，但 doctor 未返回可识别的安装报告。请在终端运行 ${command} doctor，确认版本支持该命令并检查诊断结果后刷新。`
+      ? `找到 ${name} 启动文件，但无法读取版本。请在终端运行 ${command} --version，检查启动文件及权限后刷新。`
       : inaccessible
-        ? `部分安装位置无法访问，暂时无法确认 ${name} 是否可用。请检查权限，并在终端运行 ${command} doctor。`
+        ? `部分安装位置无法访问，暂时无法确认 ${name} 是否可用。请检查权限，并在终端运行 ${command} --version。`
         : `未在本机 PATH 和常见安装位置检测到 ${name}。请先安装；已安装时请检查 PATH，并重启 AI Switch 后重新检测。`
   }
 }
 
-function getSearchDirectories(toolId: ToolId): string[] {
+export function getSearchDirectories(applicationId?: ApplicationId): string[] {
   const userHome = homedir()
   const directories = [
     ...(process.env.PATH ?? '').split(delimiter),
@@ -138,7 +156,8 @@ function getSearchDirectories(toolId: ToolId): string[] {
     join(userHome, '.bun', 'bin'),
     join(userHome, '.npm-global', 'bin')
   ]
-  if (baseToolId(toolId) === 'codex') directories.push(...getCodexCommandDirectories())
+  if (applicationId && APPLICATION_INSTANCES[applicationId].kind === 'codex')
+    directories.push(...getCodexCommandDirectories())
   if (process.platform === 'win32') {
     if (process.env.APPDATA) directories.push(join(process.env.APPDATA, 'npm'))
     if (process.env.LOCALAPPDATA) {

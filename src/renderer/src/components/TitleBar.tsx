@@ -49,9 +49,7 @@ export function TitleBar({
       const result: ApiResult<unknown> = await api[action]()
       if (!result.ok) throw new Error(result.error.message)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '窗口操作失败，请重试。', {
-        id: 'window-control'
-      })
+      toast.error(error instanceof Error ? error.message : '窗口操作失败，请重试。')
     }
   }
 

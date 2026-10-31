@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Tray } from
 import { join, resolve } from 'path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { WINDOW_STATE_CHANGED } from '@shared/ipc'
+import { APPLICATION_TASK_CHANGED, WINDOW_STATE_CHANGED } from '@shared/ipc'
 import { registerAppIpc } from './ipc'
 import { ClaudeCodeAdapter } from './adapters/claude-code'
 import { CodexAdapter } from './adapters/codex'
@@ -23,6 +23,9 @@ import { runAppMigrations } from './migrations'
 import { AppDatabase } from './database'
 import { ConfigurationTargets } from './database/configuration-targets'
 import { toApiError } from './errors'
+import { ApplicationPreferencesStore } from './services/application-preferences'
+import { ApplicationManagementService } from './services/application-management'
+import { WslRuntime } from './services/wsl-runtime'
 import icon from '../../resources/icon.png?asset'
 import windowsIcon from '../../resources/icon.ico?asset'
 
@@ -37,6 +40,7 @@ const rendererUrl =
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 let database: AppDatabase | null = null
 let appSettings: AppSettingsStore | null = null
+let applications: ApplicationManagementService | null = null
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
@@ -57,7 +61,16 @@ function showMainWindow(): void {
 }
 
 app.on('second-instance', showMainWindow)
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (applications?.hasRunningTasks()) {
+    event.preventDefault()
+    showMainWindow()
+    dialog.showErrorBox(
+      'AI 应用任务正在运行',
+      '请等待安装、更新或卸载任务结束后再退出。可以最小化窗口，任务会继续执行。'
+    )
+    return
+  }
   isQuitting = true
 })
 app.on('will-quit', () => {
@@ -177,11 +190,25 @@ app.whenReady().then(async () => {
     return
   }
   const providerStore = new ProviderStore(database)
-  const wsl = new WslService()
+  const applicationPreferences = new ApplicationPreferencesStore(database)
+  const wslRuntime = new WslRuntime((distribution) =>
+    applicationPreferences.getLaunch(distribution)
+  )
+  const wsl = new WslService(wslRuntime)
   const pathSettings = new PathSettingsStore(database, wsl)
   const commonConfigs = new CommonConfigStore(database)
   const managedStates = new ManagedStateStore(database)
   const installations = new ToolInstallationService(wsl)
+  applications = new ApplicationManagementService(
+    applicationPreferences,
+    pathSettings,
+    installations,
+    wslRuntime,
+    (task) => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed())
+        mainWindow.webContents.send(APPLICATION_TASK_CHANGED, task)
+    }
+  )
   const backupService = new BackupService(database, commonConfigs, managedStates)
   const cloudBackupService = new CloudBackupService(
     providerStore,
@@ -220,10 +247,11 @@ app.whenReady().then(async () => {
     switchService,
     toolStatusService,
     appSettings,
-    cloudBackupService
+    cloudBackupService,
+    applications
   )
   const unregisterIpc = registerAppIpc(rendererUrl, controller)
-  app.once('before-quit', unregisterIpc)
+  app.once('will-quit', unregisterIpc)
 
   createTray()
   isInitialized = true

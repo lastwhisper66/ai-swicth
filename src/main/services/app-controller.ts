@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import type {
   AppSnapshot,
+  ApplicationTask,
   AppTheme,
   AppSettingsInput,
   CloudBackupOperationInput,
@@ -28,6 +29,8 @@ import type {
   RestoreBackupInput,
   RestoreResult,
   SetToolPathInput,
+  SetWslLaunchSettingsInput,
+  StartApplicationTaskInput,
   UpdateProviderInput
 } from '@shared/ipc'
 import type { ProviderStore } from '../providers/store'
@@ -38,6 +41,7 @@ import type { ToolStatusService } from './tool-status'
 import { openToolLocation } from './tool-location'
 import type { AppSettingsStore } from './app-settings'
 import type { CloudBackupService } from './cloud-backup'
+import type { ApplicationManagementService } from './application-management'
 
 export class AppController {
   private mutationLock: Promise<void> = Promise.resolve()
@@ -49,7 +53,8 @@ export class AppController {
     private readonly switchService: SwitchService,
     private readonly toolStatusService: ToolStatusService,
     private readonly appSettings: AppSettingsStore,
-    private readonly cloudBackup: CloudBackupService
+    private readonly cloudBackup: CloudBackupService,
+    readonly applications: ApplicationManagementService
   ) {}
 
   async getSnapshot(refreshInstallations = false): Promise<AppSnapshot> {
@@ -60,6 +65,7 @@ export class AppController {
       this.cloudBackup.listLocalBackups()
     ])
     return {
+      applicationPreferences: this.applications.preferences.get(),
       appInfo: { name: app.getName(), version: app.getVersion() },
       settings: this.appSettings.get(),
       providers,
@@ -67,6 +73,14 @@ export class AppController {
       backups,
       configurationBackups
     }
+  }
+
+  async setWslLaunchSettings(input: SetWslLaunchSettingsInput): Promise<void> {
+    return this.applications.setLaunch(input)
+  }
+
+  async startApplicationTask(input: StartApplicationTaskInput): Promise<ApplicationTask> {
+    return this.applications.start(input)
   }
 
   async setAppSettings(input: AppSettingsInput): Promise<AppSnapshot> {

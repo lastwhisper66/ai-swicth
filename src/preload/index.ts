@@ -1,7 +1,28 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC_CHANNELS, WINDOW_STATE_CHANGED, type DesktopApi, type WindowState } from '@shared/ipc'
+import {
+  APPLICATION_TASK_CHANGED,
+  IPC_CHANNELS,
+  WINDOW_STATE_CHANGED,
+  type ApplicationTask,
+  type DesktopApi,
+  type WindowState
+} from '@shared/ipc'
 
 const api: DesktopApi = {
+  getApplications: () => ipcRenderer.invoke(IPC_CHANNELS.getApplications),
+  getApplicationTasks: () => ipcRenderer.invoke(IPC_CHANNELS.getApplicationTasks),
+  setApplicationVisibility: (input) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setApplicationVisibility, input),
+  setWslLaunchSettings: (input) => ipcRenderer.invoke(IPC_CHANNELS.setWslLaunchSettings, input),
+  startApplicationTask: (input) => ipcRenderer.invoke(IPC_CHANNELS.startApplicationTask, input),
+  onApplicationTaskChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, task: ApplicationTask): void =>
+      listener(task)
+    ipcRenderer.on(APPLICATION_TASK_CHANGED, handler)
+    return () => {
+      ipcRenderer.removeListener(APPLICATION_TASK_CHANGED, handler)
+    }
+  },
   window: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.getWindowState),
     minimize: () => ipcRenderer.invoke(IPC_CHANNELS.minimizeWindow),

@@ -1,10 +1,16 @@
 import { TOOL_NAMES } from '@shared/ipc'
+import { APPLICATION_IDS, type ApplicationId } from '@shared/applications'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, type IpcMainInvokeEvent } from 'electron'
 import {
   IPC_CHANNELS,
   CLOUD_BACKUP_RETENTION,
   TOOL_IDS,
   PROVIDER_TOOL_IDS,
+  APPLICATION_ACTIONS,
+  WSL_SHELLS,
+  type SetApplicationVisibilityInput,
+  type SetWslLaunchSettingsInput,
+  type StartApplicationTaskInput,
   type ApiResult,
   type AppInfo,
   type AppSettingsInput,
@@ -45,6 +51,33 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
 
   registerBusinessHandler(IPC_CHANNELS.getSnapshot, rendererUrl, expectNoArguments, () =>
     controller.getSnapshot(true)
+  )
+  registerBusinessHandler(IPC_CHANNELS.getApplications, rendererUrl, expectNoArguments, () =>
+    controller.applications.list()
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.getApplicationTasks,
+    rendererUrl,
+    expectNoArguments,
+    async () => controller.applications.getTasks()
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.setApplicationVisibility,
+    rendererUrl,
+    parseApplicationVisibility,
+    async (input) => controller.applications.preferences.setVisible(input.toolId, input.visible)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.setWslLaunchSettings,
+    rendererUrl,
+    parseWslLaunchSettings,
+    (input) => controller.setWslLaunchSettings(input)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.startApplicationTask,
+    rendererUrl,
+    parseApplicationTask,
+    (input) => controller.startApplicationTask(input)
   )
   registerBusinessHandler(
     IPC_CHANNELS.getWindowState,
@@ -286,6 +319,37 @@ function parseAppSettings(args: unknown[]): AppSettingsInput {
   const input = expectRecordArgument(args)
   if (input.closeBehavior !== 'tray' && input.closeBehavior !== 'quit') throw invalidRequest()
   return { closeBehavior: input.closeBehavior }
+}
+
+function parseApplicationVisibility(args: unknown[]): SetApplicationVisibilityInput {
+  const input = expectRecordArgument(args)
+  return { toolId: expectToolId(input.toolId), visible: expectBoolean(input.visible) }
+}
+
+function parseWslLaunchSettings(args: unknown[]): SetWslLaunchSettingsInput {
+  const input = expectRecordArgument(args)
+  if (!WSL_SHELLS.includes(input.shell as SetWslLaunchSettingsInput['shell']))
+    throw invalidRequest()
+  return {
+    applicationId: expectApplicationId(input.applicationId),
+    shell: input.shell as SetWslLaunchSettingsInput['shell']
+  }
+}
+
+function parseApplicationTask(args: unknown[]): StartApplicationTaskInput {
+  const input = expectRecordArgument(args)
+  if (!APPLICATION_ACTIONS.includes(input.action as StartApplicationTaskInput['action']))
+    throw invalidRequest()
+  return {
+    applicationId: expectApplicationId(input.applicationId),
+    action: input.action as StartApplicationTaskInput['action']
+  }
+}
+
+function expectApplicationId(value: unknown): ApplicationId {
+  if (typeof value !== 'string' || !APPLICATION_IDS.includes(value as ApplicationId))
+    throw invalidRequest()
+  return value as ApplicationId
 }
 
 function parseCloudBackupSettings(args: unknown[]): CloudBackupSettingsInput {

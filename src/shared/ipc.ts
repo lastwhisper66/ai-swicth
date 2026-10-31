@@ -1,8 +1,14 @@
 import type { ProviderConfigurations, HeaderInput, HeaderValue } from './configuration'
+import type { ApplicationId } from './applications'
 
 export const IPC_CHANNELS = {
   getAppInfo: 'app:get-info',
   getSnapshot: 'app:get-snapshot',
+  getApplications: 'applications:list',
+  getApplicationTasks: 'applications:tasks',
+  setApplicationVisibility: 'applications:set-visibility',
+  setWslLaunchSettings: 'applications:set-wsl-launch',
+  startApplicationTask: 'applications:start-task',
   setAppSettings: 'app:set-settings',
   setCloudBackupSettings: 'cloud-backup:set-settings',
   setCloudBackupPassword: 'cloud-backup:set-password',
@@ -36,6 +42,7 @@ export const IPC_CHANNELS = {
 } as const
 
 export const WINDOW_STATE_CHANGED = 'window:state-changed'
+export const APPLICATION_TASK_CHANGED = 'applications:task-changed'
 
 export interface WindowState {
   isMaximized: boolean
@@ -44,6 +51,71 @@ export interface WindowState {
 export const TOOL_IDS = ['claude-code', 'codex', 'claude-code-wsl', 'codex-wsl'] as const
 
 export type ToolId = (typeof TOOL_IDS)[number]
+
+export const WSL_SHELLS = ['auto', 'bash', 'zsh', 'fish'] as const
+export const APPLICATION_ACTIONS = ['install', 'update', 'uninstall', 'check-update'] as const
+export type WslShell = (typeof WSL_SHELLS)[number]
+export type ApplicationAction = (typeof APPLICATION_ACTIONS)[number]
+
+export interface WslLaunchSettings {
+  shell: WslShell
+}
+
+export interface ApplicationPreferences {
+  visible: Record<ToolId, boolean>
+  wsl: Record<string, WslLaunchSettings>
+}
+
+export interface SetApplicationVisibilityInput {
+  toolId: ToolId
+  visible: boolean
+}
+
+export interface SetWslLaunchSettingsInput extends WslLaunchSettings {
+  applicationId: ApplicationId
+}
+
+export interface StartApplicationTaskInput {
+  applicationId: ApplicationId
+  action: ApplicationAction
+}
+
+export interface NpmInstallation {
+  available: boolean
+  nodeVersion: string | null
+  npmVersion: string | null
+  prefix: string | null
+  packageVersion: string | null
+  managed: boolean
+  message: string
+}
+
+export interface ManagedApplication {
+  applicationId: ApplicationId
+  installation: ToolInstallation
+  npm: NpmInstallation
+  distribution: string | null
+  distributionLabel: string | null
+  user: string | null
+  shell: string | null
+  launchSettings: WslLaunchSettings
+  environmentError: string | null
+  latestVersion: string | null
+  latestVersionError: string | null
+  updateAvailable: boolean
+}
+
+export interface ApplicationTask {
+  id: string
+  applicationId: ApplicationId
+  action: ApplicationAction
+  state: 'running' | 'succeeded' | 'failed'
+  message: string
+  log: string[]
+  startedAt: string
+  finishedAt: string | null
+  result: ManagedApplication | null
+}
 
 export const PROVIDER_TOOL_IDS = ['claude-code', 'codex'] as const
 
@@ -259,6 +331,7 @@ export interface BackupSummary {
 }
 
 export interface AppSnapshot {
+  applicationPreferences: ApplicationPreferences
   appInfo: AppInfo
   settings: AppSettings
   providers: ProviderSummary[]
@@ -378,6 +451,14 @@ export interface ApiError {
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: ApiError }
 
 export interface DesktopApi {
+  getApplications: () => Promise<ApiResult<ManagedApplication[]>>
+  getApplicationTasks: () => Promise<ApiResult<ApplicationTask[]>>
+  setApplicationVisibility: (
+    input: SetApplicationVisibilityInput
+  ) => Promise<ApiResult<ApplicationPreferences>>
+  setWslLaunchSettings: (input: SetWslLaunchSettingsInput) => Promise<ApiResult<void>>
+  startApplicationTask: (input: StartApplicationTaskInput) => Promise<ApiResult<ApplicationTask>>
+  onApplicationTaskChanged: (listener: (task: ApplicationTask) => void) => () => void
   window: {
     getState: () => Promise<ApiResult<WindowState>>
     minimize: () => Promise<ApiResult<void>>

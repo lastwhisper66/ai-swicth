@@ -1,9 +1,11 @@
-import { startTransition, useEffect, useState } from 'react'
+import { startTransition, useEffect, useRef, useState } from 'react'
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { baseToolId } from '@shared/ipc'
+import { APPLICATION_INSTANCES } from '@shared/applications'
 import type {
   ApiResult,
+  ApplicationTask,
   AppSnapshot,
   CloudBackupOperationResult,
   CloudBackupSettingsInput,
@@ -14,6 +16,7 @@ import type {
   ToolId
 } from '@shared/ipc'
 import { AppSidebar } from '@renderer/components/AppSidebar'
+import { ApplicationsPage } from '@renderer/components/features/ApplicationsPage'
 import { TitleBar } from '@renderer/components/TitleBar'
 import { ProviderForm } from '@renderer/components/features/ProviderForm'
 import { SettingsPage, type SettingsSection } from '@renderer/components/features/SettingsPage'
@@ -25,12 +28,12 @@ import { Spinner } from '@renderer/components/ui/spinner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 
 type ProviderEditorState = { provider: ProviderSummary | null; toolId: ToolId } | null
-type MainView = ToolId | 'settings'
-
-const feedbackToastId = 'app-feedback'
+type MainView = ToolId | 'settings' | 'applications'
 
 function App(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null)
+  const [applicationTasks, setApplicationTasks] = useState<ApplicationTask[]>([])
+  const completedApplicationTasks = useRef(new Set<string>())
   const [providerEditor, setProviderEditor] = useState<ProviderEditorState>(null)
   const [settingsTool, setSettingsTool] = useState<ToolId>('claude-code')
   const [view, setView] = useState<MainView>('claude-code')
@@ -54,9 +57,7 @@ function App(): React.JSX.Element {
       .then((result) => {
         if (!active) return
         if (result.ok) {
-          startTransition(() => {
-            setSnapshot(result.value)
-          })
+          adoptSnapshot(result.value)
         } else {
           setConnectionError(result.error.message)
         }
@@ -69,9 +70,97 @@ function App(): React.JSX.Element {
     }
   }, [])
 
+  useEffect(() => {
+    const api = window.api
+    if (!api) return
+    let active = true
+    const unsubscribe = api.onApplicationTaskChanged((task) => {
+      if (!active) return
+      setApplicationTasks((previous) =>
+        [...previous.filter((entry) => entry.id !== task.id), task].slice(-30)
+      )
+      if (task.state === 'running' || completedApplicationTasks.current.has(task.id)) return
+      completedApplicationTasks.current.add(task.id)
+      if (task.state === 'failed') toast.error(task.message, { duration: 8000 })
+      else toast.success(task.message)
+      if (task.action === 'check-update') {
+        const toolId = APPLICATION_INSTANCES[task.applicationId].configurationToolId
+        const installation = task.result?.installation
+        if (toolId && installation)
+          setSnapshot((previous) =>
+            previous
+              ? {
+                  ...previous,
+                  tools: {
+                    ...previous.tools,
+                    [toolId]: { ...previous.tools[toolId], installation }
+                  }
+                }
+              : previous
+          )
+        return
+      }
+      void api
+        .getSnapshot()
+        .then((response) => {
+          if (active && response.ok) adoptSnapshot(response.value)
+        })
+        .catch(() => {})
+    })
+    void api
+      .getApplicationTasks()
+      .then((response) => {
+        if (!active || !response.ok) return
+        setApplicationTasks((previous) => {
+          const merged = new Map(response.value.map((task) => [task.id, task]))
+          for (const task of previous) merged.set(task.id, task)
+          return [...merged.values()].slice(-30)
+        })
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [])
+
+  async function setApplicationVisibility(toolId: ToolId, visible: boolean): Promise<boolean> {
+    try {
+      const response = await window.api.setApplicationVisibility({ toolId, visible })
+      if (!response.ok) {
+        showError(response.error.message)
+        return false
+      }
+      setSnapshot((previous) =>
+        previous ? { ...previous, applicationPreferences: response.value } : previous
+      )
+      if (!visible && view === toolId) setView('applications')
+      return true
+    } catch {
+      showError('无法保存侧栏显示设置，请重新打开应用后重试。')
+      return false
+    }
+  }
+
+  function refreshApplicationEnvironment(): void {
+    void window.api
+      .getSnapshot()
+      .then((response) => {
+        if (response.ok) adoptSnapshot(response.value)
+      })
+      .catch(() => {})
+  }
+
   function adoptSnapshot(nextSnapshot: AppSnapshot): void {
     startTransition(() => {
       setSnapshot(nextSnapshot)
+      setView((current) =>
+        current !== 'settings' &&
+        current !== 'applications' &&
+        !nextSnapshot.applicationPreferences.visible[current]
+          ? 'applications'
+          : current
+      )
       setConnectionError(null)
     })
   }
@@ -294,15 +383,15 @@ function App(): React.JSX.Element {
   }
 
   function showSuccess(message: string): void {
-    toast.success(message, { id: feedbackToastId, duration: 4000 })
+    toast.success(message, { duration: 4000 })
   }
 
   function showError(message: string): void {
-    toast.error(message, { id: feedbackToastId, duration: 8000 })
+    toast.error(message, { duration: 8000 })
   }
 
   function showWarning(message: string): void {
-    toast.warning(message, { id: feedbackToastId, duration: 8000 })
+    toast.warning(message, { duration: 8000 })
   }
 
   function openProviderEditor(toolId: ToolId, provider: ProviderSummary | null = null): void {
@@ -354,6 +443,7 @@ function App(): React.JSX.Element {
         <div className="flex min-h-0 flex-1">
           <AppSidebar
             view={view}
+            visible={snapshot.applicationPreferences.visible}
             busy={pendingKey !== null}
             onViewChange={(nextView) => {
               if (nextView === 'settings') setSettingsSection('general')
@@ -362,7 +452,20 @@ function App(): React.JSX.Element {
           />
           <main className="min-h-0 min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both">
             <div className="mx-auto w-full max-w-6xl px-5 py-6 lg:px-8 lg:py-8">
-              {view === 'settings' ? (
+              {view === 'applications' ? (
+                <ApplicationsPage
+                  preferences={snapshot.applicationPreferences}
+                  tasks={applicationTasks}
+                  onVisibilityChange={setApplicationVisibility}
+                  onTaskStarted={(task) =>
+                    setApplicationTasks((previous) => {
+                      const current = previous.find((entry) => entry.id === task.id)
+                      return current ? previous : [...previous, task].slice(-30)
+                    })
+                  }
+                  onEnvironmentChanged={refreshApplicationEnvironment}
+                />
+              ) : view === 'settings' ? (
                 <SettingsPage
                   section={settingsSection}
                   appInfo={snapshot.appInfo}
