@@ -86,7 +86,8 @@ export function validateConfigurations<T extends ToolId>(
       fail('每个工具需保存 1 到 100 个模型预设。')
     const models: ModelPreset[] = config.models.map((model) => {
       if (!isObject(model)) fail('模型记录格式无效。')
-      exactKeys(model, ['id', 'name', 'model', 'options'])
+      // Older libraries and backups may contain a display name; discard it on read.
+      exactKeys(model, stored ? ['id', 'name', 'model', 'options'] : ['id', 'model', 'options'])
       const isClaude = baseToolId(toolId) === 'claude-code'
       const apiModel = text(model.model, isClaude ? 204 : 200, 'API 模型 ID')
       const options = validateModelOptions(model.options, toolId)
@@ -96,9 +97,6 @@ export function validateConfigurations<T extends ToolId>(
       if (isClaude && modelId !== apiModel) options.context1m = true
       return {
         id: identifier(model.id),
-        name: isClaude
-          ? `${modelId}${options.context1m ? '[1m]' : ''}`
-          : text(model.name, 80, '模型显示名称'),
         model: modelId,
         options
       }

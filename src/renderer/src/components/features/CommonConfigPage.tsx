@@ -10,10 +10,12 @@ import {
   type ProviderToolId
 } from '@shared/ipc'
 import {
+  nativeModel,
   parseConfiguration,
   serializeConfiguration,
   type ConfigObject
 } from '@shared/configuration'
+import { modelPresetChoices } from '@renderer/lib/provider-form'
 import { CommonOptionsForm } from './CommonOptionsForm'
 import { ConfigurationSelect } from './ConfigurationSelect'
 import { ToolIcon } from '@renderer/components/ToolIcon'
@@ -322,10 +324,7 @@ function CommonConfigEditor({
                         <ConfigurationSelect
                           label="迁移到模型预设"
                           value={migrationModel.id}
-                          choices={migrationConfig!.models.map((model) => [
-                            model.id,
-                            `${model.name} (${model.model})`
-                          ])}
+                          choices={modelPresetChoices(toolId, migrationConfig!.models)}
                           onChange={setMigrationModelId}
                           disabled={busy}
                         />
@@ -338,7 +337,8 @@ function CommonConfigEditor({
                           <AlertDialogContent>
                             <AlertDialogHeader>
                               <AlertDialogTitle>
-                                迁移到 {migrationProvider.name} / {migrationModel.name}？
+                                迁移到 {migrationProvider.name} /{' '}
+                                {nativeModel(toolId, migrationModel)}？
                               </AlertDialogTitle>
                               <AlertDialogDescription>
                                 将读取已保存模板，把可映射字段迁移到所选连接和模型，替换其对应选项和请求头，然后从模板移除这些字段。未保存草稿不会参与迁移，并会在迁移完成后丢弃；其他模型的

@@ -193,7 +193,6 @@ export interface ToolStatus {
   currentProviderId: string | null
   currentProviderName: string | null
   currentModelId: string | null
-  currentModelName: string | null
   isExternalConfig: boolean
   baseUrl: string | null
   model: string | null

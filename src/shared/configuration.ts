@@ -34,7 +34,6 @@ export interface ModelOptions {
 
 export interface ModelPreset {
   id: string
-  name: string
   model: string
   options: ModelOptions
 }

@@ -46,7 +46,6 @@ export class ToolStatusService {
         currentProviderId: null,
         currentProviderName: null,
         currentModelId: null,
-        currentModelName: null,
         isExternalConfig: false,
         baseUrl: null,
         model: null
@@ -79,7 +78,6 @@ export class ToolStatusService {
           currentProviderId: null,
           currentProviderName: null,
           currentModelId: null,
-          currentModelName: null,
           isExternalConfig: false,
           baseUrl: null,
           model: null
@@ -104,7 +102,6 @@ export class ToolStatusService {
         currentProviderId: null,
         currentProviderName: null,
         currentModelId: null,
-        currentModelName: null,
         isExternalConfig: false,
         baseUrl: null,
         model: null
@@ -173,7 +170,7 @@ export class ToolStatusService {
         statusMessage: externallyChanged
           ? '供应商、模型选项或请求头已被外部修改，请检查当前预览后重新应用。'
           : matchedProvider
-            ? `当前使用 ${matchedProvider.name} / ${selected?.preset.name}。已写入配置，服务能力未探测。`
+            ? `当前使用 ${matchedProvider.name} / ${current.model}。已写入配置，服务能力未探测。`
             : matches.length > 1
               ? '当前文件匹配多个相同选项的预设，请应用其中一个以确认当前预设。'
               : baseToolId(toolId) === 'codex' && current.model && !current.apiKey
@@ -184,7 +181,6 @@ export class ToolStatusService {
         currentProviderId: matchedProvider?.id ?? null,
         currentProviderName: matchedProvider?.name ?? null,
         currentModelId: selected?.preset.id ?? null,
-        currentModelName: selected?.preset.name ?? null,
         isExternalConfig: hasConfiguration && !matchedProvider,
         baseUrl: current.baseUrl,
         model: current.model
@@ -202,7 +198,6 @@ export class ToolStatusService {
           currentProviderId: null,
           currentProviderName: null,
           currentModelId: null,
-          currentModelName: null,
           isExternalConfig: false,
           baseUrl: null,
           model: null

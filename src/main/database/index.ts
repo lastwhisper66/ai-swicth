@@ -91,11 +91,10 @@ export class AppDatabase {
           connections.map((c) => {
             const models = this.sql
               .prepare(
-                'SELECT id, name, model, options FROM model_presets WHERE provider_id = ? AND tool_id = ? ORDER BY position'
+                'SELECT id, model, options FROM model_presets WHERE provider_id = ? AND tool_id = ? ORDER BY position'
               )
               .all(p.id, c.tool_id) as Array<{
               id: string
-              name: string
               model: string
               options: string
             }>
@@ -124,16 +123,26 @@ export class AppDatabase {
       this.sql.prepare('DELETE FROM providers').run()
       const provider = this.sql.prepare('INSERT INTO providers VALUES (?, ?, ?, ?, ?, ?, ?)')
       const connection = this.sql.prepare('INSERT INTO provider_connections VALUES (?, ?, ?, ?, ?)')
-      const model = this.sql.prepare('INSERT INTO model_presets VALUES (?, ?, ?, ?, ?, ?, ?)')
+      // Legacy JSON is imported at schema v2, before v3 removes the old name column.
+      const legacyModelNames = (
+        this.sql.pragma('table_info(model_presets)') as Array<{ name: string }>
+      ).some((column) => column.name === 'name')
+      const model = this.sql.prepare(
+        legacyModelNames
+          ? 'INSERT INTO model_presets (provider_id, tool_id, id, name, model, options, position) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          : 'INSERT INTO model_presets (provider_id, tool_id, id, model, options, position) VALUES (?, ?, ?, ?, ?, ?)'
+      )
       const header = this.sql.prepare('INSERT INTO provider_headers VALUES (?, ?, ?, ?, ?, ?)')
       providers.forEach((p, position) => {
         provider.run(p.id, p.name, p.baseUrl, p.apiKey, p.createdAt, p.updatedAt, position)
         p.tools.forEach((toolId, index) => {
           const { models, headers, defaultModelId, ...options } = p.configurations[toolId]!
           connection.run(p.id, toolId, defaultModelId, JSON.stringify(options), index)
-          models.forEach((m, order) =>
-            model.run(p.id, toolId, m.id, m.name, m.model, JSON.stringify(m.options), order)
-          )
+          models.forEach((m, order) => {
+            const values = [p.id, toolId, m.id, m.model, JSON.stringify(m.options), order]
+            if (legacyModelNames) values.splice(3, 0, m.model)
+            model.run(...values)
+          })
           headers.forEach((h, order) => header.run(p.id, toolId, h.id, h.name, h.value, order))
         })
       })

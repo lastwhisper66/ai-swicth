@@ -8,7 +8,6 @@ import {
   VERBOSITIES,
   DEFAULT_CHOICES,
   claudeBaseModel,
-  nativeModel,
   type HeaderInput,
   type ModelOptions,
   type ModelPreset,
@@ -34,12 +33,9 @@ export function ModelPresetEditor({
   const changeModel = (id: string, changes: Partial<ModelPreset>): void =>
     onChange({
       ...configuration,
-      models: configuration.models.map((model) => {
-        if (model.id !== id) return model
-        const next = { ...model, ...changes }
-        if (isClaude) next.name = nativeModel(toolId, next)
-        return next
-      })
+      models: configuration.models.map((model) =>
+        model.id === id ? { ...model, ...changes } : model
+      )
     })
   const option = (preset: ModelPreset, key: keyof ModelOptions, value: string): void => {
     const options = { ...preset.options }
@@ -66,8 +62,8 @@ export function ModelPresetEditor({
       </div>
       <p className="text-xs leading-6 text-muted-foreground">
         {isClaude
-          ? '直接填写模型名，勾选 1M 上下文即可添加 [1m] 后缀。思考强度在共通配置中统一设置。'
-          : '同一 API 模型 ID 可保存多个预设。选项随预设保存；1M、Fast 及思考级别的实际可用性由模型和网关决定。'}
+          ? '直接填写 API 模型 ID，勾选 1M 上下文即可添加 [1m] 后缀。思考强度在共通配置中统一设置。'
+          : '填写供应商提供的 API 模型 ID，同一 ID 可保存不同选项的预设。1M、Fast 及思考级别的实际可用性由模型和网关决定。'}
       </p>
       {configuration.models.map((preset, index) => {
         const efforts = codexEfforts(preset.model)
@@ -114,21 +110,8 @@ export function ModelPresetEditor({
               </div>
             </div>
             <div className="grid gap-4">
-              {!isClaude && (
-                <Field className="gap-2">
-                  <FieldLabel htmlFor={`${preset.id}-name`}>显示名称</FieldLabel>
-                  <Input
-                    id={`${preset.id}-name`}
-                    value={preset.name}
-                    onChange={(event) => changeModel(preset.id, { name: event.target.value })}
-                    placeholder="例如：日常编程 / 深度思考"
-                  />
-                </Field>
-              )}
               <Field className="gap-2">
-                <FieldLabel htmlFor={`${preset.id}-model`}>
-                  {isClaude ? '模型名' : 'API 模型 ID'}
-                </FieldLabel>
+                <FieldLabel htmlFor={`${preset.id}-model`}>API 模型 ID</FieldLabel>
                 <Input
                   id={`${preset.id}-model`}
                   value={preset.model}

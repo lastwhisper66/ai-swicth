@@ -6,6 +6,7 @@
 - `runner.ts`：校验编号和数据库，升级前使用 SQLite 在线备份接口生成恢复副本，协调准备过程和同步事务。
 - `steps/001-create-schema.ts`：创建业务表、外键和索引。
 - `steps/002-import-legacy-storage.ts`：校验旧 JSON、备份原文、事务导入数据并清理旧活动文件。
+- `steps/003-remove-model-display-names.ts`：移除模型预设的显示名称列，保留记录 ID、API 模型 ID、选项和默认引用。已有数据库升级前沿用在线备份；旧 JSON 先经第 2 步导入，再移除名称列。
 - `legacy-storage.ts`、`context.ts`：将旧版本、旧 WSL 及固定名称文件转换为内存中的当前业务数据，不先改写源文件。
 
 ## 提交与恢复

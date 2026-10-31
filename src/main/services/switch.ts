@@ -144,7 +144,7 @@ export class SwitchService {
       return {
         toolId,
         backupId,
-        message: `已应用 ${provider.name} / ${preset.name}，请新建或重启 ${adapter.displayName} 会话。`,
+        message: `已应用 ${provider.name} / ${configuration.model}，请新建或重启 ${adapter.displayName} 会话。`,
         warnings: generated.warnings,
         restartRequired: true
       }

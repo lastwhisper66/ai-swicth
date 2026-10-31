@@ -1,9 +1,20 @@
-import { Check, CircleCheck, Cpu, Globe, KeyRound, Pencil, Play, Trash2 } from 'lucide-react'
+import {
+  Check,
+  CircleCheck,
+  Cpu,
+  Ellipsis,
+  Globe,
+  KeyRound,
+  Pencil,
+  Play,
+  Trash2
+} from 'lucide-react'
 import { useState } from 'react'
 import type { ProviderSummary, ToolId } from '@shared/ipc'
 import { baseToolId } from '@shared/ipc'
 import { nativeModel } from '@shared/configuration'
 import { cn } from '@renderer/lib/utils'
+import { modelPresetChoices } from '@renderer/lib/provider-form'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,6 +32,12 @@ import { Button } from '@renderer/components/ui/button'
 import { Item, ItemActions, ItemContent } from '@renderer/components/ui/item'
 import { Spinner } from '@renderer/components/ui/spinner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@renderer/components/ui/dropdown-menu'
 import { ConfigurationSelect } from './ConfigurationSelect'
 
 interface ProviderRowProps {
@@ -95,102 +112,121 @@ export function ProviderRow({
             fullWidth={!onApply}
             inline={Boolean(onApply)}
           />
-          <ProviderDetail
-            label={onApply ? '模型' : `模型（${config.models.length} 个预设）`}
-            value={nativeModel(toolId, selected)}
-            Icon={Cpu}
-            inline={Boolean(onApply)}
-          />
-          {!onApply && (
-            <ProviderDetail label="API Key" value={provider.maskedApiKey} Icon={KeyRound} />
+          {onApply ? (
+            <div className="flex min-w-0 items-center gap-2">
+              <dt className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                <Cpu className="size-3.5" aria-hidden="true" />
+                切换模型
+              </dt>
+              <dd className="w-64 min-w-0">
+                <ConfigurationSelect
+                  label="切换模型"
+                  hideLabel
+                  value={selected.id}
+                  choices={modelPresetChoices(toolId, config.models)}
+                  onChange={setSelectedModelId}
+                  disabled={busy}
+                  indicator={
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span
+                          role="img"
+                          aria-label={isAppliedModel ? '该模型已应用' : '该模型待应用'}
+                        >
+                          <CircleCheck
+                            className={cn(
+                              'size-4',
+                              isAppliedModel
+                                ? 'fill-emerald-600 text-white'
+                                : 'text-muted-foreground'
+                            )}
+                            aria-hidden="true"
+                          />
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {isAppliedModel ? '该模型已应用' : '该模型待应用'}
+                      </TooltipContent>
+                    </Tooltip>
+                  }
+                />
+              </dd>
+            </div>
+          ) : (
+            <>
+              <ProviderDetail
+                label={`模型（${config.models.length} 个预设）`}
+                value={nativeModel(toolId, selected)}
+                Icon={Cpu}
+              />
+              <ProviderDetail label="API Key" value={provider.maskedApiKey} Icon={KeyRound} />
+            </>
           )}
         </dl>
       </ItemContent>
-      <ItemActions className="flex-wrap items-end justify-end gap-4">
+      <ItemActions className="ml-auto shrink-0 flex-wrap justify-end gap-3 self-end">
         {onApply && (
-          <div className="w-52 min-w-0 max-w-full">
-            <ConfigurationSelect
-              label="应用模型"
-              value={selected.id}
-              choices={config.models.map((model) => [model.id, model.name])}
-              onChange={setSelectedModelId}
-              disabled={busy}
-              indicator={
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span role="img" aria-label={isAppliedModel ? '该模型已应用' : '该模型待应用'}>
-                      <CircleCheck
-                        className={cn(
-                          'size-4',
-                          isAppliedModel ? 'fill-emerald-600 text-white' : 'text-muted-foreground'
-                        )}
-                        aria-hidden="true"
-                      />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {isAppliedModel ? '该模型已应用' : '该模型待应用'}
-                  </TooltipContent>
-                </Tooltip>
-              }
-            />
-          </div>
-        )}
-        <div className="flex shrink-0 items-center gap-1">
-          {onApply && (
-            <Button
-              type="button"
-              variant={isCurrent ? 'outline' : 'default'}
-              disabled={busy}
-              onClick={() => onApply(selected.id)}
-            >
-              {pending ? <Spinner aria-hidden="true" /> : <Play aria-hidden="true" />}
-              {pending ? '应用中…' : '应用'}
-            </Button>
-          )}
           <Button
             type="button"
-            variant="outline"
-            onClick={onEdit}
+            variant={isCurrent ? 'outline' : 'default'}
             disabled={busy}
-            aria-label={`编辑 ${provider.name}`}
+            onClick={() => onApply(selected.id)}
           >
-            <Pencil aria-hidden="true" />
-            编辑
+            {pending ? <Spinner aria-hidden="true" /> : <Play aria-hidden="true" />}
+            {pending ? '应用中…' : '应用'}
           </Button>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onEdit}
+          disabled={busy}
+          aria-label={`编辑 ${provider.name}`}
+        >
+          <Pencil aria-hidden="true" />
+          编辑
+        </Button>
+        <AlertDialog>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
               <Button
                 type="button"
                 variant="outline"
+                size="icon"
                 disabled={busy}
-                aria-label={`删除 ${provider.name}`}
+                aria-label={`更多 ${provider.name}`}
+                title="更多"
               >
-                <Trash2 aria-hidden="true" />
-                删除
+                <Ellipsis aria-hidden="true" />
               </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogMedia>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <AlertDialogTrigger asChild>
+                <DropdownMenuItem variant="destructive">
                   <Trash2 aria-hidden="true" />
-                </AlertDialogMedia>
-                <AlertDialogTitle className="wrap-anywhere">
-                  删除 {provider.name}？
-                </AlertDialogTitle>
-                <AlertDialogDescription>
-                  这会删除 AI Switch 中保存的信息，不会撤销已经写入工具的配置。
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>取消</AlertDialogCancel>
-                <AlertDialogAction variant="destructive" onClick={onDelete}>
-                  确认删除
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
+                  删除供应商
+                </DropdownMenuItem>
+              </AlertDialogTrigger>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogMedia>
+                <Trash2 aria-hidden="true" />
+              </AlertDialogMedia>
+              <AlertDialogTitle className="wrap-anywhere">删除 {provider.name}？</AlertDialogTitle>
+              <AlertDialogDescription>
+                这会删除 AI Switch 中保存的信息，不会撤销已经写入工具的配置。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>取消</AlertDialogCancel>
+              <AlertDialogAction variant="destructive" onClick={onDelete}>
+                确认删除
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </ItemActions>
     </Item>
   )

@@ -188,7 +188,7 @@ export function decodeDocument(value: unknown): ProviderDocument {
           return [
             toolId,
             {
-              models: [{ id, name: model[toolId], model: model[toolId], options: {} }],
+              models: [{ id, model: model[toolId], options: {} }],
               defaultModelId: id,
               headers: []
             }

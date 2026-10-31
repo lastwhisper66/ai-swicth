@@ -63,6 +63,9 @@ export function ToolConfigPage({
   const compatibleProviders = providers.filter((provider) =>
     provider.tools.includes(baseToolId(toolId))
   )
+  const showStatusMessage = Boolean(
+    status.statusMessage && !(status.fileState === 'ready' && status.currentProviderId)
+  )
 
   return (
     <div className="space-y-6">
@@ -92,24 +95,16 @@ export function ToolConfigPage({
             label="当前供应商"
             value={status.currentProviderName ?? (status.isExternalConfig ? '外部配置' : '未配置')}
           />
-          <InfoItem
-            label="当前模型"
-            value={
-              baseToolId(toolId) !== 'claude-code' &&
-              status.currentModelName &&
-              status.currentModelName !== status.model
-                ? `${status.currentModelName} (${status.model})`
-                : (status.model ?? '—')
-            }
-            mono
-          />
+          <InfoItem label="当前模型" value={status.model ?? '—'} mono />
           <InfoItem label="Base URL" value={status.baseUrl ?? '—'} mono />
-          <Alert className="bg-muted/25 sm:col-span-3" role="status">
-            <Info aria-hidden="true" />
-            <AlertDescription className="text-xs leading-5 wrap-anywhere">
-              {status.statusMessage}
-            </AlertDescription>
-          </Alert>
+          {showStatusMessage && (
+            <Alert className="bg-muted/25 sm:col-span-3" role="status">
+              <Info aria-hidden="true" />
+              <AlertDescription className="text-xs leading-5 wrap-anywhere">
+                {status.statusMessage}
+              </AlertDescription>
+            </Alert>
+          )}
         </CardContent>
       </Card>
 
