@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { Download, FileText, MoreHorizontal, RefreshCw, Trash2, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -10,7 +10,6 @@ import {
   type ToolId
 } from '@shared/ipc'
 import {
-  APPLICATION_IDS,
   APPLICATION_INSTANCES,
   getApplicationDefinition,
   isWslApplication,
@@ -19,6 +18,7 @@ import {
 import { ApplicationIcon } from '@renderer/components/ApplicationIcon'
 import { useApplications } from '@renderer/hooks/use-applications'
 import { ApplicationDetailsDialog } from './ApplicationDetailsDialog'
+import { SortableApplicationTable } from './SortableApplicationTable'
 import { Button } from '@renderer/components/ui/button'
 import { Badge } from '@renderer/components/ui/badge'
 import { Label } from '@renderer/components/ui/label'
@@ -52,8 +52,10 @@ import {
 
 interface ApplicationsPageProps {
   preferences: ApplicationPreferences
+  preferencesReady: boolean
   tasks: ApplicationTask[]
   onVisibilityChange: (toolId: ToolId, visible: boolean) => Promise<boolean>
+  onOrderChange: (order: ApplicationId[]) => Promise<boolean>
   onTaskStarted: (task: ApplicationTask) => void
   onEnvironmentChanged: () => void
 }
@@ -67,16 +69,45 @@ const actionNames: Record<ApplicationAction, string> = {
 
 export function ApplicationsPage({
   preferences,
+  preferencesReady,
   tasks,
   onVisibilityChange,
+  onOrderChange,
   onTaskStarted,
   onEnvironmentChanged
 }: ApplicationsPageProps): React.JSX.Element {
-  const { applications, refreshing, error, readyForActions, refresh } = useApplications(tasks)
+  const { applications, refreshing, error, refresh } = useApplications(tasks)
   const [pending, setPending] = useState<ApplicationId | null>(null)
   const [pendingChecks, setPendingChecks] = useState(new Set<ApplicationId>())
   const [detailsTarget, setDetailsTarget] = useState<ApplicationId | null>(null)
   const [uninstallTarget, setUninstallTarget] = useState<ManagedApplication | null>(null)
+  const [draftOrder, setDraftOrder] = useState<ApplicationId[] | null>(null)
+  const [orderSaving, setOrderSaving] = useState(false)
+  const savingOrder = useRef(false)
+  const order = draftOrder ?? preferences.order
+
+  async function moveApplication(
+    applicationId: ApplicationId,
+    targetId: ApplicationId
+  ): Promise<void> {
+    if (!preferencesReady || savingOrder.current || applicationId === targetId) return
+    const next = [...order]
+    const from = next.indexOf(applicationId)
+    const to = next.indexOf(targetId)
+    if (from < 0 || to < 0) return
+    next.splice(from, 1)
+    next.splice(to, 0, applicationId)
+    savingOrder.current = true
+    setOrderSaving(true)
+    setDraftOrder(next)
+    try {
+      await onOrderChange(next)
+    } finally {
+      savingOrder.current = false
+      setOrderSaving(false)
+      setDraftOrder(null)
+    }
+  }
 
   async function changeLaunch(input: SetWslLaunchSettingsInput): Promise<void> {
     setPending(input.applicationId)
@@ -88,7 +119,7 @@ export function ApplicationsPage({
       }
       toast.success('shell 已保存，同一发行版的应用共用此设置。')
       onEnvironmentChanged()
-      await refresh(false, true)
+      void refresh(false, true)
     } catch {
       toast.error('无法保存 WSL 设置，请重新打开应用后重试。')
     } finally {
@@ -129,22 +160,33 @@ export function ApplicationsPage({
     }
   }
 
-  const installed =
-    applications?.filter((application) => application.installation.state === 'installed') ?? []
-  const remaining =
-    applications?.filter((application) => application.installation.state !== 'installed') ?? []
-  const hasUncertain = remaining.some(
-    (application) => application.installation.state === 'unavailable'
-  )
+  function renderPending(applicationId: ApplicationId, dragHandle: ReactNode): React.JSX.Element {
+    const configurationToolId = APPLICATION_INSTANCES[applicationId].configurationToolId
+    return (
+      <PendingApplicationRow
+        key={applicationId}
+        applicationId={applicationId}
+        visible={configurationToolId ? preferences.visible[configurationToolId] : false}
+        failed={!refreshing}
+        dragHandle={dragHandle}
+      />
+    )
+  }
 
-  function renderApplication(application: ManagedApplication): React.JSX.Element {
+  function renderApplication(
+    application: ManagedApplication,
+    dragHandle: ReactNode,
+    overlay: boolean
+  ): React.JSX.Element {
     const configurationToolId = APPLICATION_INSTANCES[application.applicationId].configurationToolId
     const task = tasks.findLast((entry) => entry.applicationId === application.applicationId)
-    const sameEnvironment = (applicationId: ApplicationId): boolean =>
-      isWslApplication(applicationId) === isWslApplication(application.applicationId) &&
-      (!isWslApplication(applicationId) ||
-        applications?.find((item) => item.applicationId === applicationId)?.distribution ===
-          application.distribution)
+    const sameEnvironment = (applicationId: ApplicationId): boolean => {
+      if (isWslApplication(applicationId) !== isWslApplication(application.applicationId))
+        return false
+      if (!isWslApplication(applicationId)) return true
+      const other = applications.find((item) => item.applicationId === applicationId)
+      return !other?.distribution || other.distribution === application.distribution
+    }
     const environmentTasks = tasks.filter(
       (entry) => entry.state === 'running' && sameEnvironment(entry.applicationId)
     )
@@ -154,14 +196,16 @@ export function ApplicationsPage({
       <ApplicationRow
         key={application.applicationId}
         application={application}
+        dragHandle={dragHandle}
+        overlay={overlay}
         task={task}
         visible={configurationToolId ? preferences.visible[configurationToolId] : false}
-        visibilityDisabled={pending !== null || !configurationToolId}
+        visibilityDisabled={!preferencesReady || pending !== null || !configurationToolId}
         disabled={
-          !readyForActions || pending !== null || environmentTasks.length > 0 || checkStarting
+          !preferencesReady || pending !== null || environmentTasks.length > 0 || checkStarting
         }
         checkDisabled={
-          !readyForActions ||
+          !preferencesReady ||
           pending !== null ||
           mutationRunning ||
           pendingChecks.has(application.applicationId) ||
@@ -184,7 +228,7 @@ export function ApplicationsPage({
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
+    <div className="w-full min-w-0 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="space-y-0.5">
           <h1 className="text-lg font-semibold tracking-tight">AI 应用</h1>
@@ -196,8 +240,8 @@ export function ApplicationsPage({
           disabled={refreshing}
           onClick={() => void refresh(true)}
         >
-          <RefreshCw className={refreshing ? 'animate-spin' : undefined} />
-          {refreshing ? '正在刷新' : '重新检测'}
+          <RefreshCw />
+          重新检测
         </Button>
       </div>
       {error && (
@@ -205,47 +249,22 @@ export function ApplicationsPage({
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
-      {applications?.some((application) => application.latestVersionError) && (
+      {applications.some((application) => application.latestVersionError) && (
         <p role="status" className="text-xs text-muted-foreground">
           部分应用的 npm 最新版本查询失败，对应更新已禁用。请检查网络后重试。
         </p>
       )}
-      {!applications ? (
-        <ApplicationSection title="待确认" count={APPLICATION_IDS.length} versionTitle="版本">
-          {APPLICATION_IDS.map((applicationId) => {
-            const configurationToolId = APPLICATION_INSTANCES[applicationId].configurationToolId
-            return (
-              <PendingApplicationRow
-                key={applicationId}
-                applicationId={applicationId}
-                visible={configurationToolId ? preferences.visible[configurationToolId] : false}
-                failed={!!error}
-              />
-            )
-          })}
-        </ApplicationSection>
-      ) : (
-        <>
-          <ApplicationSection title="已安装" count={installed.length} versionTitle="版本">
-            {installed.length ? (
-              installed.map(renderApplication)
-            ) : (
-              <EmptyApplications message="暂未检测到已安装的应用" />
-            )}
-          </ApplicationSection>
-          <ApplicationSection
-            title={hasUncertain ? '未安装 / 待确认' : '未安装'}
-            count={remaining.length}
-            versionTitle="状态"
-          >
-            {remaining.length ? (
-              remaining.map(renderApplication)
-            ) : (
-              <EmptyApplications message="所有应用均已安装" />
-            )}
-          </ApplicationSection>
-        </>
-      )}
+      <SortableApplicationTable
+        order={order}
+        disabled={!preferencesReady || orderSaving}
+        onMove={moveApplication}
+        renderRow={(id, dragHandle, overlay) => {
+          const application = applications.find((item) => item.applicationId === id)
+          return application
+            ? renderApplication(application, dragHandle, overlay)
+            : renderPending(id, dragHandle)
+        }}
+      />
       <p className="text-xs leading-5 text-muted-foreground">
         WSL 使用已配置或默认发行版；显示开关控制供应商页面在侧栏的显示。
       </p>
@@ -254,7 +273,7 @@ export function ApplicationsPage({
           key={detailsTarget}
           applicationId={detailsTarget}
           application={
-            applications?.find((application) => application.applicationId === detailsTarget) ?? null
+            applications.find((application) => application.applicationId === detailsTarget) ?? null
           }
           tasks={tasks.filter((task) => task.applicationId === detailsTarget)}
           error={error}
@@ -299,92 +318,31 @@ export function ApplicationsPage({
   )
 }
 
-function ApplicationSection({
-  title,
-  count,
-  versionTitle,
-  children
-}: {
-  title: string
-  count: number
-  versionTitle: string
-  children: ReactNode
-}): React.JSX.Element {
-  return (
-    <section aria-label={title} className="overflow-hidden rounded-lg border bg-card">
-      <table className="w-full table-fixed border-collapse text-left">
-        <colgroup>
-          <col />
-          <col className="w-20 md:w-24" />
-          <col className="w-10 md:w-12" />
-          <col className="w-12" />
-          <col className="w-16" />
-          <col className="w-24" />
-        </colgroup>
-        <thead className="border-b bg-muted/25 text-xs text-muted-foreground">
-          <tr>
-            <th scope="col" className="px-3 py-2 text-left font-normal">
-              <h2 className="font-medium text-foreground">
-                {title}
-                <span className="ml-1.5 font-normal text-muted-foreground">· {count}</span>
-              </h2>
-            </th>
-            <th scope="col" className="py-2 text-center font-normal">
-              {versionTitle}
-            </th>
-            <th scope="col" className="py-2 text-center font-normal">
-              显示
-            </th>
-            <th scope="col" className="py-2 text-center font-normal">
-              详情
-            </th>
-            <th scope="col" className="py-2 text-center font-normal">
-              检查更新
-            </th>
-            <th scope="col" className="py-2 pr-2 text-right font-normal">
-              操作
-            </th>
-          </tr>
-        </thead>
-        {children}
-      </table>
-    </section>
-  )
-}
-
-function EmptyApplications({ message }: { message: string }): React.JSX.Element {
-  return (
-    <tbody>
-      <tr>
-        <td colSpan={6} className="px-3 py-5 text-center text-xs text-muted-foreground">
-          {message}
-        </td>
-      </tr>
-    </tbody>
-  )
-}
-
 function PendingApplicationRow({
   applicationId,
   visible,
-  failed
+  failed,
+  dragHandle
 }: {
   applicationId: ApplicationId
   visible: boolean
   failed: boolean
+  dragHandle: ReactNode
 }): React.JSX.Element {
   const name = getApplicationDefinition(applicationId).name
+  const wsl = isWslApplication(applicationId)
   return (
-    <tbody className="border-b last:border-b-0">
+    <>
       <tr>
+        <td className="pl-1 text-center">{dragHandle}</td>
         <td className="px-3 py-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <ApplicationIcon applicationId={applicationId} className="size-5" />
             <div className="min-w-0 space-y-0.5">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-sm font-medium">{name}</span>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="shrink-0 text-sm font-medium whitespace-nowrap">{name}</span>
                 <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
-                  {isWslApplication(applicationId) ? 'WSL' : '本机'}
+                  {wsl ? 'WSL' : '本机'}
                 </Badge>
               </div>
               <div
@@ -393,15 +351,25 @@ function PendingApplicationRow({
               >
                 {!failed && <Spinner className="size-3 shrink-0" />}
                 <span className="truncate">
-                  {failed
-                    ? '路径待确认'
-                    : isWslApplication(applicationId)
-                      ? '正在确认发行版与路径'
-                      : '正在确认路径'}
+                  {failed ? '路径待确认' : wsl ? '正在确认发行版与路径' : '正在确认路径'}
                 </span>
               </div>
             </div>
           </div>
+        </td>
+        <td className="px-1 text-center text-xs text-muted-foreground">
+          {wsl ? (
+            failed ? (
+              '待确认'
+            ) : (
+              <span role="status">
+                <Spinner className="mx-auto size-4" />
+                <span className="sr-only">正在确认 shell</span>
+              </span>
+            )
+          ) : (
+            '—'
+          )}
         </td>
         <td className="text-center text-[11px] text-muted-foreground" role="status">
           {failed ? (
@@ -432,12 +400,14 @@ function PendingApplicationRow({
           </Button>
         </td>
       </tr>
-    </tbody>
+    </>
   )
 }
 
 function ApplicationRow({
   application,
+  dragHandle,
+  overlay,
   task,
   visible,
   disabled,
@@ -452,6 +422,8 @@ function ApplicationRow({
   onDetails
 }: {
   application: ManagedApplication
+  dragHandle: ReactNode
+  overlay: boolean
   task: ApplicationTask | undefined
   visible: boolean
   disabled: boolean
@@ -486,19 +458,20 @@ function ApplicationRow({
       ? '正在执行 npm，请稍候…'
       : task?.message
   const showTaskProgress = task && task.action !== 'check-update' && task.state !== 'succeeded'
-  const hasSecondary = wsl || warning || relatedRunning || showTaskProgress
+  const hasSecondary = warning || relatedRunning || showTaskProgress
   return (
-    <tbody className="border-b last:border-b-0">
+    <>
       <tr>
+        <td className="pl-1 text-center">{dragHandle}</td>
         <td className="px-3 py-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <ApplicationIcon applicationId={application.applicationId} className="size-5" />
             <div className="min-w-0 space-y-0.5">
-              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-                <span className="text-sm font-medium">{name}</span>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="shrink-0 text-sm font-medium whitespace-nowrap">{name}</span>
                 <Badge
                   variant="secondary"
-                  className="h-4 max-w-full px-1.5 text-[10px]"
+                  className="h-4 min-w-0 max-w-full px-1.5 text-[10px]"
                   title={application.distributionLabel ?? undefined}
                 >
                   <span className="truncate">
@@ -515,6 +488,31 @@ function ApplicationRow({
               </p>
             </div>
           </div>
+        </td>
+        <td className="px-1 py-3 text-center">
+          {wsl ? (
+            <LaunchSelect
+              id={`shell-${application.applicationId}${overlay ? '-drag-preview' : ''}`}
+              label={`${name} WSL shell`}
+              value={application.launchSettings.shell}
+              choices={[
+                ['auto', '自动'],
+                ['bash', 'bash'],
+                ['zsh', 'zsh'],
+                ['fish', 'fish']
+              ]}
+              disabled={disabled || !application.distribution}
+              onChange={(shell) =>
+                onLaunchChange({
+                  applicationId: application.applicationId,
+                  ...application.launchSettings,
+                  shell: shell as SetWslLaunchSettingsInput['shell']
+                })
+              }
+            />
+          ) : (
+            <span className="text-xs text-muted-foreground">—</span>
+          )}
         </td>
         <td className="px-1 py-3 text-center">
           {installed ? (
@@ -632,31 +630,8 @@ function ApplicationRow({
       </tr>
       {hasSecondary && (
         <tr>
-          <td colSpan={6} className="px-3 pb-3">
+          <td colSpan={8} className="px-3 pb-3">
             <div className="space-y-2">
-              {wsl && (
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pl-7.5">
-                  <LaunchSelect
-                    id={`shell-${application.applicationId}`}
-                    label="shell"
-                    value={application.launchSettings.shell}
-                    choices={[
-                      ['auto', '自动'],
-                      ['bash', 'bash'],
-                      ['zsh', 'zsh'],
-                      ['fish', 'fish']
-                    ]}
-                    disabled={disabled || !application.distribution}
-                    onChange={(shell) =>
-                      onLaunchChange({
-                        applicationId: application.applicationId,
-                        ...application.launchSettings,
-                        shell: shell as SetWslLaunchSettingsInput['shell']
-                      })
-                    }
-                  />
-                </div>
-              )}
               {warning && <p className="text-xs leading-5 text-destructive">{warning}</p>}
               {relatedRunning && task?.state !== 'running' && (
                 <p className="text-xs text-muted-foreground">此环境的另一个任务正在运行…</p>
@@ -676,7 +651,7 @@ function ApplicationRow({
           </td>
         </tr>
       )}
-    </tbody>
+    </>
   )
 }
 
@@ -728,12 +703,12 @@ function LaunchSelect({
   onChange: (value: string) => void
 }): React.JSX.Element {
   return (
-    <div className="flex items-center gap-1.5">
-      <Label htmlFor={id} className="text-xs text-muted-foreground">
+    <div className="mx-auto flex w-full max-w-20 items-center">
+      <Label htmlFor={id} className="sr-only">
         {label}
       </Label>
       <Select value={value} onValueChange={onChange} disabled={disabled}>
-        <SelectTrigger id={id} size="sm" className="w-24 text-xs">
+        <SelectTrigger id={id} size="sm" className="w-full min-w-0 px-2 text-xs [&_svg]:size-3">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

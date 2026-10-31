@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Tray } from 'electron'
+import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, screen, Tray } from 'electron'
 import { join, resolve } from 'path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -81,11 +81,16 @@ app.on('will-quit', () => {
 })
 
 function createWindow(): void {
+  const { workArea } = screen.getPrimaryDisplay()
+  const width = Math.min(1600, workArea.width)
+  const height = Math.min(1080, workArea.height)
   const window = new BrowserWindow({
-    width: 1080,
-    height: 760,
-    minWidth: 720,
-    minHeight: 560,
+    width,
+    height,
+    x: workArea.x + Math.floor((workArea.width - width) / 2),
+    y: workArea.y + Math.floor((workArea.height - height) / 2),
+    minWidth: Math.min(720, width),
+    minHeight: Math.min(560, height),
     title: 'AI Switch',
     frame: false,
     show: false,

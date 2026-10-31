@@ -15,7 +15,7 @@ import { ProviderRow } from './ProviderRow'
 
 interface ProvidersPageProps {
   providers: ProviderSummary[]
-  tools: Record<ToolId, ToolStatus>
+  tools: Partial<Record<ToolId, ToolStatus>>
   busy: boolean
   toolId: ToolId
   onToolChange: (toolId: ToolId) => void

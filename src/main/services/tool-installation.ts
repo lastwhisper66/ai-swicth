@@ -31,8 +31,14 @@ export class ToolInstallationService {
 
   constructor(private readonly wsl: WslService) {}
 
-  clear(): void {
-    this.cache.clear()
+  clear(applicationId?: ApplicationId): void {
+    if (!applicationId) {
+      this.cache.clear()
+      return
+    }
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(`${applicationId}:`)) this.cache.delete(key)
+    }
   }
 
   get(
@@ -55,7 +61,7 @@ export class ToolInstallationService {
         entry.expiresAt = Date.now() + CACHE_DURATION
       },
       () => {
-        this.cache.delete(key)
+        if (this.cache.get(key) === entry) this.cache.delete(key)
       }
     )
     return result

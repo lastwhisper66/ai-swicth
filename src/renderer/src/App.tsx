@@ -1,11 +1,12 @@
 import { startTransition, useEffect, useRef, useState } from 'react'
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
-import { baseToolId } from '@shared/ipc'
-import { APPLICATION_INSTANCES } from '@shared/applications'
+import { baseToolId, TOOL_IDS } from '@shared/ipc'
+import { APPLICATION_IDS, APPLICATION_INSTANCES, type ApplicationId } from '@shared/applications'
 import type {
   ApiResult,
   ApplicationTask,
+  ApplicationPreferences,
   AppSnapshot,
   CloudBackupOperationResult,
   CloudBackupSettingsInput,
@@ -23,15 +24,28 @@ import { SettingsPage, type SettingsSection } from '@renderer/components/feature
 import { ToolConfigPage } from '@renderer/components/features/ToolConfigPage'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import { Button } from '@renderer/components/ui/button'
-import { Card, CardContent } from '@renderer/components/ui/card'
-import { Spinner } from '@renderer/components/ui/spinner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
+import { useAppBootstrap } from '@renderer/hooks/use-app-bootstrap'
 
 type ProviderEditorState = { provider: ProviderSummary | null; toolId: ToolId } | null
 type MainView = ToolId | 'settings' | 'applications'
+const initialPreferences: ApplicationPreferences = {
+  visible: Object.fromEntries(TOOL_IDS.map((id) => [id, true])) as Record<ToolId, boolean>,
+  wsl: {},
+  order: [...APPLICATION_IDS]
+}
 
 function App(): React.JSX.Element {
-  const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null)
+  const {
+    snapshot,
+    setSnapshot,
+    connectionError,
+    toolErrors,
+    initialize,
+    loadTool,
+    replaceSnapshot,
+    updateInstallation
+  } = useAppBootstrap()
   const [applicationTasks, setApplicationTasks] = useState<ApplicationTask[]>([])
   const completedApplicationTasks = useRef(new Set<string>())
   const [providerEditor, setProviderEditor] = useState<ProviderEditorState>(null)
@@ -39,36 +53,23 @@ function App(): React.JSX.Element {
   const [view, setView] = useState<MainView>('claude-code')
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
   const [pendingKey, setPendingKey] = useState<string | null>(null)
-  const [connectionError, setConnectionError] = useState<string | null>(() =>
-    window.api ? null : '本地桥接未加载，请关闭并重新打开应用。'
-  )
 
   useEffect(() => {
     let active = true
-    const api = window.api
-    if (!api) {
-      return () => {
-        active = false
-      }
-    }
-
-    api
-      .getSnapshot()
-      .then((result) => {
-        if (!active) return
-        if (result.ok) {
-          adoptSnapshot(result.value)
-        } else {
-          setConnectionError(result.error.message)
-        }
-      })
-      .catch(() => {
-        if (active) setConnectionError('无法连接本地应用，请关闭并重新打开应用。')
-      })
+    void initialize().then((result) => {
+      if (active && result)
+        setView((current) =>
+          current !== 'settings' &&
+          current !== 'applications' &&
+          !result.applicationPreferences.visible[current]
+            ? 'applications'
+            : current
+        )
+    })
     return () => {
       active = false
     }
-  }, [])
+  }, [initialize])
 
   useEffect(() => {
     const api = window.api
@@ -83,29 +84,27 @@ function App(): React.JSX.Element {
       completedApplicationTasks.current.add(task.id)
       if (task.state === 'failed') toast.error(task.message, { duration: 8000 })
       else toast.success(task.message)
-      if (task.action === 'check-update') {
-        const toolId = APPLICATION_INSTANCES[task.applicationId].configurationToolId
-        const installation = task.result?.installation
-        if (toolId && installation)
-          setSnapshot((previous) =>
-            previous
-              ? {
-                  ...previous,
-                  tools: {
-                    ...previous.tools,
-                    [toolId]: { ...previous.tools[toolId], installation }
-                  }
-                }
-              : previous
-          )
-        return
+      const toolId = APPLICATION_INSTANCES[task.applicationId].configurationToolId
+      const installation = task.result?.installation
+      const visible = task.sidebarVisible
+      if (toolId && installation) updateInstallation(toolId, installation)
+      if (toolId && (installation || typeof visible === 'boolean')) {
+        setSnapshot((previous) =>
+          previous
+            ? {
+                ...previous,
+                applicationPreferences:
+                  typeof visible === 'boolean'
+                    ? {
+                        ...previous.applicationPreferences,
+                        visible: { ...previous.applicationPreferences.visible, [toolId]: visible }
+                      }
+                    : previous.applicationPreferences
+              }
+            : previous
+        )
+        if (visible === false) setView((current) => (current === toolId ? 'applications' : current))
       }
-      void api
-        .getSnapshot()
-        .then((response) => {
-          if (active && response.ok) adoptSnapshot(response.value)
-        })
-        .catch(() => {})
     })
     void api
       .getApplicationTasks()
@@ -122,7 +121,7 @@ function App(): React.JSX.Element {
       active = false
       unsubscribe()
     }
-  }, [])
+  }, [setSnapshot, updateInstallation])
 
   async function setApplicationVisibility(toolId: ToolId, visible: boolean): Promise<boolean> {
     try {
@@ -132,12 +131,48 @@ function App(): React.JSX.Element {
         return false
       }
       setSnapshot((previous) =>
-        previous ? { ...previous, applicationPreferences: response.value } : previous
+        previous
+          ? {
+              ...previous,
+              applicationPreferences: {
+                ...previous.applicationPreferences,
+                visible: {
+                  ...previous.applicationPreferences.visible,
+                  [toolId]: response.value.visible[toolId]
+                }
+              }
+            }
+          : previous
       )
       if (!visible && view === toolId) setView('applications')
       return true
     } catch {
       showError('无法保存侧栏显示设置，请重新打开应用后重试。')
+      return false
+    }
+  }
+
+  async function setApplicationOrder(order: ApplicationId[]): Promise<boolean> {
+    try {
+      const response = await window.api.setApplicationOrder({ order })
+      if (!response.ok) {
+        showError(response.error.message)
+        return false
+      }
+      setSnapshot((previous) =>
+        previous
+          ? {
+              ...previous,
+              applicationPreferences: {
+                ...previous.applicationPreferences,
+                order: response.value.order
+              }
+            }
+          : previous
+      )
+      return true
+    } catch {
+      showError('无法保存应用顺序，请完整重启应用后重试。')
       return false
     }
   }
@@ -153,7 +188,7 @@ function App(): React.JSX.Element {
 
   function adoptSnapshot(nextSnapshot: AppSnapshot): void {
     startTransition(() => {
-      setSnapshot(nextSnapshot)
+      replaceSnapshot(nextSnapshot)
       setView((current) =>
         current !== 'settings' &&
         current !== 'applications' &&
@@ -161,23 +196,19 @@ function App(): React.JSX.Element {
           ? 'applications'
           : current
       )
-      setConnectionError(null)
     })
   }
 
   async function retryConnection(): Promise<void> {
-    setConnectionError(null)
-    if (!window.api) {
-      setConnectionError('本地桥接未加载，请关闭并重新打开应用。')
-      return
-    }
-    try {
-      const result = await window.api.getSnapshot()
-      if (result.ok) adoptSnapshot(result.value)
-      else setConnectionError(result.error.message)
-    } catch {
-      setConnectionError('无法连接本地应用，请关闭并重新打开应用。')
-    }
+    const result = await initialize()
+    if (result)
+      setView((current) =>
+        current !== 'settings' &&
+        current !== 'applications' &&
+        !result.applicationPreferences.visible[current]
+          ? 'applications'
+          : current
+      )
   }
 
   async function refreshSnapshot(): Promise<void> {
@@ -401,49 +432,18 @@ function App(): React.JSX.Element {
     setProviderEditor({ provider, toolId })
   }
 
-  if (!snapshot) {
-    return (
-      <div className="flex h-svh flex-col overflow-hidden">
-        <TitleBar />
-        <main className="grid min-h-0 flex-1 place-items-center overflow-y-auto px-6 py-6">
-          <Card className="w-full max-w-sm py-0 text-center">
-            <CardContent className="p-6">
-              {connectionError ? (
-                <Alert variant="destructive">
-                  <AlertCircle aria-hidden="true" />
-                  <AlertDescription>{connectionError}</AlertDescription>
-                </Alert>
-              ) : (
-                <>
-                  <Spinner className="mx-auto size-6" aria-label="正在读取本地配置" />
-                  <p className="mt-3 text-sm">正在读取本地配置…</p>
-                </>
-              )}
-              {connectionError && (
-                <Button className="mt-4" variant="outline" onClick={() => void retryConnection()}>
-                  <RefreshCw aria-hidden="true" />
-                  重试
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-        </main>
-      </div>
-    )
-  }
-
   return (
     <TooltipProvider>
       <div className="flex h-svh min-w-0 flex-col overflow-hidden">
         <TitleBar
           busy={pendingKey !== null}
           refreshing={pendingKey === 'refresh'}
-          onRefresh={() => void refreshSnapshot()}
+          onRefresh={snapshot ? () => void refreshSnapshot() : () => void retryConnection()}
         />
         <div className="flex min-h-0 flex-1">
           <AppSidebar
             view={view}
-            visible={snapshot.applicationPreferences.visible}
+            visible={snapshot?.applicationPreferences.visible ?? initialPreferences.visible}
             busy={pendingKey !== null}
             onViewChange={(nextView) => {
               if (nextView === 'settings') setSettingsSection('general')
@@ -451,12 +451,24 @@ function App(): React.JSX.Element {
             }}
           />
           <main className="min-h-0 min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both">
-            <div className="mx-auto w-full max-w-6xl px-5 py-6 lg:px-8 lg:py-8">
+            <div className="w-full min-w-0 px-5 py-6 lg:px-8 lg:py-8">
+              {connectionError && (
+                <Alert variant="destructive" className="mb-4">
+                  <AlertCircle aria-hidden="true" />
+                  <AlertDescription>{connectionError}</AlertDescription>
+                  <Button size="sm" variant="outline" onClick={() => void retryConnection()}>
+                    <RefreshCw />
+                    重试
+                  </Button>
+                </Alert>
+              )}
               {view === 'applications' ? (
                 <ApplicationsPage
-                  preferences={snapshot.applicationPreferences}
+                  preferences={snapshot?.applicationPreferences ?? initialPreferences}
+                  preferencesReady={!!snapshot}
                   tasks={applicationTasks}
                   onVisibilityChange={setApplicationVisibility}
+                  onOrderChange={setApplicationOrder}
                   onTaskStarted={(task) =>
                     setApplicationTasks((previous) => {
                       const current = previous.find((entry) => entry.id === task.id)
@@ -465,7 +477,7 @@ function App(): React.JSX.Element {
                   }
                   onEnvironmentChanged={refreshApplicationEnvironment}
                 />
-              ) : view === 'settings' ? (
+              ) : view === 'settings' && snapshot ? (
                 <SettingsPage
                   section={settingsSection}
                   appInfo={snapshot.appInfo}
@@ -474,6 +486,8 @@ function App(): React.JSX.Element {
                   onSectionChange={setSettingsSection}
                   providers={snapshot.providers}
                   tools={snapshot.tools}
+                  toolErrors={toolErrors}
+                  onRetryTool={(toolId) => void loadTool(toolId)}
                   backups={snapshot.backups}
                   cloudBackup={snapshot.settings.cloudBackup}
                   pendingKey={pendingKey}
@@ -488,8 +502,8 @@ function App(): React.JSX.Element {
                         toolId={providerEditor.toolId}
                         currentModelId={
                           providerEditor.provider?.id ===
-                          snapshot.tools[providerEditor.toolId].currentProviderId
-                            ? snapshot.tools[providerEditor.toolId].currentModelId
+                          snapshot.tools[providerEditor.toolId]?.currentProviderId
+                            ? (snapshot.tools[providerEditor.toolId]?.currentModelId ?? null)
                             : null
                         }
                         onCancel={() => setProviderEditor(null)}
@@ -528,11 +542,20 @@ function App(): React.JSX.Element {
                     showSuccess(message)
                   }}
                 />
+              ) : view === 'settings' ? (
+                <div className="space-y-5" aria-busy="true">
+                  <h1 className="font-semibold">设置</h1>
+                  <div className="h-10 animate-pulse rounded-lg bg-muted" />
+                  <div className="h-48 animate-pulse rounded-lg border bg-muted/30" />
+                  <span className="sr-only">正在读取本地设置</span>
+                </div>
               ) : (
                 <ToolConfigPage
                   toolId={view}
-                  status={snapshot.tools[view]}
-                  providers={snapshot.providers}
+                  status={snapshot?.tools[view]}
+                  providers={snapshot?.providers}
+                  statusError={toolErrors[view] ?? (!snapshot ? connectionError : null)}
+                  onRetry={() => void (snapshot ? loadTool(view) : retryConnection())}
                   busy={pendingKey !== null}
                   pendingProviderId={
                     pendingKey?.startsWith(`apply:${view}:`)

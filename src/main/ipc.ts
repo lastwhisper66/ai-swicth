@@ -8,7 +8,11 @@ import {
   PROVIDER_TOOL_IDS,
   APPLICATION_ACTIONS,
   WSL_SHELLS,
+  APPLICATION_DETECTED,
+  type DetectApplicationsInput,
+  type ApplicationDetectionResult,
   type SetApplicationVisibilityInput,
+  type SetApplicationOrderInput,
   type SetWslLaunchSettingsInput,
   type StartApplicationTaskInput,
   type ApiResult,
@@ -52,8 +56,23 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
   registerBusinessHandler(IPC_CHANNELS.getSnapshot, rendererUrl, expectNoArguments, () =>
     controller.getSnapshot(true)
   )
-  registerBusinessHandler(IPC_CHANNELS.getApplications, rendererUrl, expectNoArguments, () =>
-    controller.applications.list()
+  registerBusinessHandler(IPC_CHANNELS.getBootstrap, rendererUrl, expectNoArguments, () =>
+    controller.getBootstrap()
+  )
+  registerBusinessHandler(IPC_CHANNELS.getToolStatus, rendererUrl, parseToolInput, (input) =>
+    controller.getToolStatus(input.toolId)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.getApplications,
+    rendererUrl,
+    parseApplicationDetection,
+    (input, event) =>
+      controller.applications.list((application) => {
+        if (!event.sender.isDestroyed() && event.sender.mainFrame.url === rendererUrl) {
+          const result: ApplicationDetectionResult = { requestId: input.requestId, application }
+          event.sender.send(APPLICATION_DETECTED, result)
+        }
+      })
   )
   registerBusinessHandler(
     IPC_CHANNELS.getApplicationTasks,
@@ -66,6 +85,12 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
     rendererUrl,
     parseApplicationVisibility,
     async (input) => controller.applications.preferences.setVisible(input.toolId, input.visible)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.setApplicationOrder,
+    rendererUrl,
+    parseApplicationOrder,
+    async (input) => controller.applications.preferences.setOrder(input.order)
   )
   registerBusinessHandler(
     IPC_CHANNELS.setWslLaunchSettings,
@@ -324,6 +349,24 @@ function parseAppSettings(args: unknown[]): AppSettingsInput {
 function parseApplicationVisibility(args: unknown[]): SetApplicationVisibilityInput {
   const input = expectRecordArgument(args)
   return { toolId: expectToolId(input.toolId), visible: expectBoolean(input.visible) }
+}
+
+function parseApplicationDetection(args: unknown[]): DetectApplicationsInput {
+  const input = expectRecordArgument(args)
+  return { requestId: expectIdentifier(input.requestId) }
+}
+
+function parseToolInput(args: unknown[]): { toolId: ToolId } {
+  return { toolId: expectToolId(expectRecordArgument(args).toolId) }
+}
+
+function parseApplicationOrder(args: unknown[]): SetApplicationOrderInput {
+  const input = expectRecordArgument(args)
+  if (!Array.isArray(input.order) || input.order.length !== APPLICATION_IDS.length)
+    throw invalidRequest()
+  const order = input.order.map(expectApplicationId)
+  if (new Set(order).size !== APPLICATION_IDS.length) throw invalidRequest()
+  return { order }
 }
 
 function parseWslLaunchSettings(args: unknown[]): SetWslLaunchSettingsInput {

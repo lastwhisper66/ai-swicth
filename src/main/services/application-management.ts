@@ -79,27 +79,29 @@ export class ApplicationManagementService {
     return this.locks.size > 0 || this.checks.size > 0
   }
 
-  async list(): Promise<ManagedApplication[]> {
+  async list(detected: (application: ManagedApplication) => void): Promise<ManagedApplication[]> {
     this.paths.refresh()
     this.installations.clear()
-    const [applications, releases] = await Promise.all([
-      Promise.all(APPLICATION_IDS.map((applicationId) => this.inspect(applicationId))),
-      Promise.all(
-        APPLICATION_KINDS.map(async (kind) => {
-          try {
-            return { kind, version: await this.readLatest(kind), error: null }
-          } catch (error) {
-            return { kind, version: null, error: toApiError(error).message }
-          }
-        })
-      )
-    ])
-    return applications.map((application) => {
-      const release = releases.find(
-        (entry) => entry.kind === APPLICATION_INSTANCES[application.applicationId].kind
-      )!
-      return withLatestVersion(application, release.version, release.error)
-    })
+    const releases = new Map(
+      APPLICATION_KINDS.map((kind) => [
+        kind,
+        this.readLatest(kind).then(
+          (version) => ({ version, error: null }),
+          (error: unknown) => ({ version: null, error: toApiError(error).message })
+        )
+      ])
+    )
+    return Promise.all(
+      APPLICATION_IDS.map(async (applicationId) => {
+        const [application, release] = await Promise.all([
+          this.inspect(applicationId),
+          releases.get(APPLICATION_INSTANCES[applicationId].kind)!
+        ])
+        const result = withLatestVersion(application, release.version, release.error)
+        detected(result)
+        return result
+      })
+    )
   }
 
   async setLaunch(input: SetWslLaunchSettingsInput): Promise<void> {
@@ -137,7 +139,8 @@ export class ApplicationManagementService {
       log: [],
       startedAt: new Date().toISOString(),
       finishedAt: null,
-      result: null
+      result: null,
+      sidebarVisible: null
     }
     for (const [id, previous] of this.tasks) {
       if (this.tasks.size < 30) break
@@ -167,7 +170,10 @@ export class ApplicationManagementService {
     }
   }
 
-  private async inspect(applicationId: ApplicationId): Promise<ManagedApplication> {
+  private async inspect(
+    applicationId: ApplicationId,
+    targetContext?: ApplicationContext
+  ): Promise<ManagedApplication> {
     const result: ManagedApplication = {
       applicationId,
       installation: {
@@ -188,7 +194,7 @@ export class ApplicationManagementService {
       updateAvailable: false
     }
     try {
-      const context = await this.context(applicationId)
+      const context = targetContext ?? (await this.context(applicationId))
       if (context.identity) {
         result.distribution = context.identity.distribution
         result.distributionLabel = context.identity.label
@@ -381,6 +387,8 @@ export class ApplicationManagementService {
   }
 
   private async execute(task: ApplicationTask, context: ApplicationContext): Promise<void> {
+    let state: 'succeeded' | 'failed' = 'succeeded'
+    let latestVersion: string | null = null
     try {
       const definition = getApplicationDefinition(task.applicationId)
       const packageName = definition.npmPackage
@@ -388,7 +396,7 @@ export class ApplicationManagementService {
         this.report(task, `查询 npm 官方 ${packageName} 的最新版本。`)
         const [version, application] = await Promise.all([
           this.readLatest(APPLICATION_INSTANCES[task.applicationId].kind),
-          this.inspect(task.applicationId)
+          this.inspect(task.applicationId, context)
         ])
         task.result = withLatestVersion(application, version, null)
         const installation = application.installation
@@ -433,12 +441,12 @@ export class ApplicationManagementService {
         if (task.action === 'update') {
           this.report(task, '重新核对 npm 官方最新版本。')
           targetVersion = await this.readLatest(APPLICATION_INSTANCES[task.applicationId].kind)
+          latestVersion = targetVersion
           const comparison = compareApplicationVersions(targetVersion, installation.version ?? '')
           if (comparison === null)
             throw new AppError('UNKNOWN', '无法比较当前 CLI 版本，请重新检测后再更新。')
           if (comparison <= 0) {
             task.message = `当前版本 ${installation.version} 无可用更新，未执行安装。`
-            task.state = 'succeeded'
             return
           }
         }
@@ -474,38 +482,33 @@ export class ApplicationManagementService {
         )
         if (response.exitCode !== 0) throw new AppError('UNKNOWN', commandFailure(response))
         this.report(task, 'npm 命令已结束，正在核对安装结果。')
-        this.installations.clear()
-        const afterNpm = await this.readNpm(context)
-        if (!afterNpm.info.available)
+        this.installations.clear(task.applicationId)
+        task.result = await this.inspect(task.applicationId, context)
+        const after = task.result
+        if (!after.npm.available)
           throw new AppError(
             'UNKNOWN',
-            `npm 命令已结束，但无法确认最终状态。${afterNpm.info.message}请重新检测。`
+            `npm 命令已结束，但无法确认最终状态。${after.npm.message}请重新检测。`
           )
         if (task.action === 'uninstall') {
-          if (afterNpm.info.packageVersion)
+          if (after.npm.packageVersion)
             throw new AppError('UNKNOWN', 'npm 包仍然存在，请检查文件占用或安装目录权限后重试。')
           task.message = `${definition.name} 的 npm 安装已卸载，工具配置和历史记录已保留。`
         } else {
-          const after = await this.installations.get(
-            task.applicationId,
-            true,
-            context.identity?.distribution
-          )
           if (
-            after.state !== 'installed' ||
-            !after.executablePath ||
-            !(await this.ownsExecutable(context, afterNpm, after.executablePath))
+            after.installation.state !== 'installed' ||
+            !after.installation.executablePath ||
+            !after.npm.managed
           )
             throw new AppError(
               'UNKNOWN',
               'npm 安装已完成，但当前 PATH 中的 CLI 未通过校验。请检查 PATH、重复安装或 shell 环境后重新检测。'
             )
-          task.message = `${definition.name} ${task.action === 'install' ? '安装' : '更新'}完成，版本 ${after.version}。请新建工具会话。`
+          task.message = `${definition.name} ${task.action === 'install' ? '安装' : '更新'}完成，版本 ${after.installation.version}。请新建工具会话。`
         }
       }
-      task.state = 'succeeded'
     } catch (error) {
-      task.state = 'failed'
+      state = 'failed'
       task.message = toApiError(error).message
     } finally {
       if (task.action === 'check-update') {
@@ -513,9 +516,31 @@ export class ApplicationManagementService {
         checks?.delete(task.applicationId)
         if (!checks?.size) this.checks.delete(context.key)
       } else {
-        this.locks.delete(context.key)
-        this.installations.clear()
+        try {
+          if (!task.result) {
+            this.installations.clear(task.applicationId)
+            task.result = await this.inspect(task.applicationId, context)
+          }
+          try {
+            latestVersion ??= await this.readLatest(APPLICATION_INSTANCES[task.applicationId].kind)
+            task.result = withLatestVersion(task.result, latestVersion, null)
+          } catch (error) {
+            task.result = withLatestVersion(task.result, null, toApiError(error).message)
+          }
+          const toolId = APPLICATION_INSTANCES[task.applicationId].configurationToolId
+          if (state === 'succeeded' && toolId && ['install', 'uninstall'].includes(task.action)) {
+            const visible = task.action === 'install'
+            this.preferences.setVisible(toolId, visible)
+            task.sidebarVisible = visible
+          }
+        } catch (error) {
+          state = 'failed'
+          task.message = toApiError(error).message
+        } finally {
+          this.locks.delete(context.key)
+        }
       }
+      task.state = state
       task.finishedAt = new Date().toISOString()
       this.report(task, task.message)
     }

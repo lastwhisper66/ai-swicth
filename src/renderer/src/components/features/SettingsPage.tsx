@@ -29,7 +29,9 @@ interface SettingsPageProps {
   onCloseBehaviorChange: (behavior: CloseBehavior) => void
   onSectionChange: (section: SettingsSection) => void
   providers: ProviderSummary[]
-  tools: Record<ToolId, ToolStatus>
+  tools: Partial<Record<ToolId, ToolStatus>>
+  toolErrors: Partial<Record<ToolId, string>>
+  onRetryTool: (toolId: ToolId) => void
   backups: BackupSummary[]
   configurationBackups: ConfigurationBackupSummary[]
   cloudBackup: CloudBackupSettings
@@ -87,6 +89,8 @@ export function SettingsPage({
   onSectionChange,
   providers,
   tools,
+  toolErrors,
+  onRetryTool,
   backups,
   configurationBackups,
   cloudBackup,
@@ -170,6 +174,8 @@ export function SettingsPage({
           <SettingsBackups
             section={section}
             tools={tools}
+            toolErrors={toolErrors}
+            onRetryTool={onRetryTool}
             backups={backups}
             configurationBackups={configurationBackups}
             onRestoreConfigurationBackup={onRestoreConfigurationBackup}

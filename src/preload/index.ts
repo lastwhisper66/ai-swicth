@@ -1,18 +1,29 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import {
   APPLICATION_TASK_CHANGED,
+  APPLICATION_DETECTED,
   IPC_CHANNELS,
   WINDOW_STATE_CHANGED,
   type ApplicationTask,
+  type ApplicationDetectionResult,
   type DesktopApi,
   type WindowState
 } from '@shared/ipc'
 
 const api: DesktopApi = {
-  getApplications: () => ipcRenderer.invoke(IPC_CHANNELS.getApplications),
+  getBootstrap: () => ipcRenderer.invoke(IPC_CHANNELS.getBootstrap),
+  getToolStatus: (input) => ipcRenderer.invoke(IPC_CHANNELS.getToolStatus, input),
+  getApplications: (input) => ipcRenderer.invoke(IPC_CHANNELS.getApplications, input),
+  onApplicationDetected: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, result: ApplicationDetectionResult): void =>
+      listener(result)
+    ipcRenderer.on(APPLICATION_DETECTED, handler)
+    return () => ipcRenderer.removeListener(APPLICATION_DETECTED, handler)
+  },
   getApplicationTasks: () => ipcRenderer.invoke(IPC_CHANNELS.getApplicationTasks),
   setApplicationVisibility: (input) =>
     ipcRenderer.invoke(IPC_CHANNELS.setApplicationVisibility, input),
+  setApplicationOrder: (input) => ipcRenderer.invoke(IPC_CHANNELS.setApplicationOrder, input),
   setWslLaunchSettings: (input) => ipcRenderer.invoke(IPC_CHANNELS.setWslLaunchSettings, input),
   startApplicationTask: (input) => ipcRenderer.invoke(IPC_CHANNELS.startApplicationTask, input),
   onApplicationTaskChanged: (listener) => {

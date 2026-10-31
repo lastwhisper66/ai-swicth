@@ -1,6 +1,9 @@
 import { app } from 'electron'
 import type {
   AppSnapshot,
+  AppBootstrap,
+  ToolId,
+  ToolStatus,
   ApplicationTask,
   AppTheme,
   AppSettingsInput,
@@ -73,6 +76,27 @@ export class AppController {
       backups,
       configurationBackups
     }
+  }
+
+  async getBootstrap(): Promise<AppBootstrap> {
+    this.pathSettings.refresh()
+    const [providers, backups, configurationBackups] = await Promise.all([
+      this.providerStore.list(),
+      this.backupService.list(),
+      this.cloudBackup.listLocalBackups()
+    ])
+    return {
+      applicationPreferences: this.applications.preferences.get(),
+      appInfo: { name: app.getName(), version: app.getVersion() },
+      settings: this.appSettings.get(),
+      providers,
+      backups,
+      configurationBackups
+    }
+  }
+
+  async getToolStatus(toolId: ToolId): Promise<ToolStatus> {
+    return this.toolStatusService.get(toolId, true)
   }
 
   async setWslLaunchSettings(input: SetWslLaunchSettingsInput): Promise<void> {

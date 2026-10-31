@@ -46,7 +46,9 @@ import { InstallationBadge, ToolInstallationStatus } from './ToolInstallationSta
 
 interface SettingsBackupsProps {
   section: 'paths' | 'backups'
-  tools: Record<ToolId, ToolStatus>
+  tools: Partial<Record<ToolId, ToolStatus>>
+  toolErrors: Partial<Record<ToolId, string>>
+  onRetryTool: (toolId: ToolId) => void
   backups: BackupSummary[]
   configurationBackups: ConfigurationBackupSummary[]
   onRestoreConfigurationBackup: (backupId: string) => void
@@ -67,6 +69,8 @@ interface SettingsBackupsProps {
 export function SettingsBackups({
   section,
   tools,
+  toolErrors,
+  onRetryTool,
   backups,
   configurationBackups,
   onRestoreConfigurationBackup,
@@ -94,17 +98,37 @@ export function SettingsBackups({
             </p>
           </div>
           <ItemGroup className="gap-0 divide-y overflow-hidden rounded-xl border bg-card">
-            {TOOL_IDS.map((toolId) => (
-              <ToolPathEditor
-                key={`${toolId}:${tools[toolId].directory}`}
-                toolId={toolId}
-                status={tools[toolId]}
-                busy={busy}
-                onPick={onPickPath}
-                onReset={onResetPath}
-                onOpenLocation={onOpenLocation}
-              />
-            ))}
+            {TOOL_IDS.map((toolId) =>
+              tools[toolId] ? (
+                <ToolPathEditor
+                  key={`${toolId}:${tools[toolId].directory}`}
+                  toolId={toolId}
+                  status={tools[toolId]}
+                  busy={busy}
+                  onPick={onPickPath}
+                  onReset={onResetPath}
+                  onOpenLocation={onOpenLocation}
+                />
+              ) : (
+                <Item key={toolId} className="rounded-none border-0 p-4">
+                  <ItemContent>
+                    <ItemTitle>{toolNames[toolId]}</ItemTitle>
+                    <ItemDescription>
+                      {toolErrors[toolId] ?? '正在确认配置路径与安装状态…'}
+                    </ItemDescription>
+                  </ItemContent>
+                  <ItemActions>
+                    {toolErrors[toolId] ? (
+                      <Button size="sm" variant="outline" onClick={() => onRetryTool(toolId)}>
+                        重试
+                      </Button>
+                    ) : (
+                      <Spinner />
+                    )}
+                  </ItemActions>
+                </Item>
+              )
+            )}
           </ItemGroup>
         </section>
       )}

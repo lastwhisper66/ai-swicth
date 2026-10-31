@@ -4,9 +4,12 @@ import type { ApplicationId } from './applications'
 export const IPC_CHANNELS = {
   getAppInfo: 'app:get-info',
   getSnapshot: 'app:get-snapshot',
+  getBootstrap: 'app:get-bootstrap',
+  getToolStatus: 'tools:get-status',
   getApplications: 'applications:list',
   getApplicationTasks: 'applications:tasks',
   setApplicationVisibility: 'applications:set-visibility',
+  setApplicationOrder: 'applications:set-order',
   setWslLaunchSettings: 'applications:set-wsl-launch',
   startApplicationTask: 'applications:start-task',
   setAppSettings: 'app:set-settings',
@@ -43,6 +46,7 @@ export const IPC_CHANNELS = {
 
 export const WINDOW_STATE_CHANGED = 'window:state-changed'
 export const APPLICATION_TASK_CHANGED = 'applications:task-changed'
+export const APPLICATION_DETECTED = 'applications:detected'
 
 export interface WindowState {
   isMaximized: boolean
@@ -64,6 +68,11 @@ export interface WslLaunchSettings {
 export interface ApplicationPreferences {
   visible: Record<ToolId, boolean>
   wsl: Record<string, WslLaunchSettings>
+  order: ApplicationId[]
+}
+
+export interface SetApplicationOrderInput {
+  order: ApplicationId[]
 }
 
 export interface SetApplicationVisibilityInput {
@@ -105,6 +114,15 @@ export interface ManagedApplication {
   updateAvailable: boolean
 }
 
+export interface DetectApplicationsInput {
+  requestId: string
+}
+
+export interface ApplicationDetectionResult {
+  requestId: string
+  application: ManagedApplication
+}
+
 export interface ApplicationTask {
   id: string
   applicationId: ApplicationId
@@ -115,6 +133,8 @@ export interface ApplicationTask {
   startedAt: string
   finishedAt: string | null
   result: ManagedApplication | null
+  /** Persisted sidebar change for this instance after a successful install or uninstall. */
+  sidebarVisible: boolean | null
 }
 
 export const PROVIDER_TOOL_IDS = ['claude-code', 'codex'] as const
@@ -340,6 +360,8 @@ export interface AppSnapshot {
   configurationBackups: ConfigurationBackupSummary[]
 }
 
+export type AppBootstrap = Omit<AppSnapshot, 'tools'>
+
 export interface ApplyProviderInput {
   toolId: ToolId
   providerId: string
@@ -451,10 +473,16 @@ export interface ApiError {
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: ApiError }
 
 export interface DesktopApi {
-  getApplications: () => Promise<ApiResult<ManagedApplication[]>>
+  getBootstrap: () => Promise<ApiResult<AppBootstrap>>
+  getToolStatus: (input: { toolId: ToolId }) => Promise<ApiResult<ToolStatus>>
+  getApplications: (input: DetectApplicationsInput) => Promise<ApiResult<ManagedApplication[]>>
+  onApplicationDetected: (listener: (result: ApplicationDetectionResult) => void) => () => void
   getApplicationTasks: () => Promise<ApiResult<ApplicationTask[]>>
   setApplicationVisibility: (
     input: SetApplicationVisibilityInput
+  ) => Promise<ApiResult<ApplicationPreferences>>
+  setApplicationOrder: (
+    input: SetApplicationOrderInput
   ) => Promise<ApiResult<ApplicationPreferences>>
   setWslLaunchSettings: (input: SetWslLaunchSettingsInput) => Promise<ApiResult<void>>
   startApplicationTask: (input: StartApplicationTaskInput) => Promise<ApiResult<ApplicationTask>>

@@ -46,6 +46,7 @@ interface ProviderRowProps {
   isCurrent: boolean
   busy: boolean
   pending?: boolean
+  applyDisabled?: boolean
   onApply?: (modelId: string) => void
   currentModelId?: string | null
   usageLabels?: string[]
@@ -59,6 +60,7 @@ export function ProviderRow({
   isCurrent,
   busy,
   pending = false,
+  applyDisabled = false,
   onApply,
   onEdit,
   onDelete,
@@ -80,7 +82,7 @@ export function ProviderRow({
         isCurrent && 'border-emerald-600/30 bg-emerald-50/30 dark:bg-emerald-950/15'
       )}
     >
-      <ItemContent className="min-w-0 max-w-3xl basis-72 gap-3">
+      <ItemContent className="min-w-0 basis-72 gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h3 className="min-w-0 truncate text-base font-semibold" title={provider.name}>
             {provider.name}
@@ -118,7 +120,7 @@ export function ProviderRow({
                 <Cpu className="size-3.5" aria-hidden="true" />
                 切换模型
               </dt>
-              <dd className="w-64 min-w-0">
+              <dd className="w-64 min-w-0 max-w-full">
                 <ConfigurationSelect
                   label="切换模型"
                   hideLabel
@@ -169,7 +171,7 @@ export function ProviderRow({
           <Button
             type="button"
             variant={isCurrent ? 'outline' : 'default'}
-            disabled={busy}
+            disabled={busy || applyDisabled}
             onClick={() => onApply(selected.id)}
           >
             {pending ? <Spinner aria-hidden="true" /> : <Play aria-hidden="true" />}
