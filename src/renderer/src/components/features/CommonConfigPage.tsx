@@ -9,14 +9,8 @@ import {
   type ProviderSummary,
   type ProviderToolId
 } from '@shared/ipc'
-import {
-  nativeModel,
-  parseConfiguration,
-  serializeConfiguration,
-  type ConfigObject
-} from '@shared/configuration'
+import { nativeModel, parseConfiguration, type ConfigObject } from '@shared/configuration'
 import { modelPresetChoices } from '@renderer/lib/provider-form'
-import { CommonOptionsForm } from './CommonOptionsForm'
 import { ConfigurationSelect } from './ConfigurationSelect'
 import { ToolIcon } from '@renderer/components/ToolIcon'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
@@ -57,7 +51,7 @@ export function CommonConfigPage({
       <div>
         <h2 className="text-base font-semibold">共通配置</h2>
         <p className="mt-1 text-sm leading-6 text-muted-foreground">
-          每个工具的本机与 WSL 共用一份配置。上方快捷修改，下方原文同步更新，也可直接编辑原文。
+          每个工具的本机与 WSL 共用一份配置。直接编辑并保存共通配置原文。
         </p>
       </div>
       <Tabs
@@ -228,40 +222,6 @@ function CommonConfigEditor({
   return (
     <Card>
       <CardContent className="space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex gap-2">
-            <Badge variant="secondary">{baseToolId(toolId) === 'codex' ? 'TOML' : 'JSON'}</Badge>
-            <Badge variant="outline">
-              {configuration?.source === 'saved'
-                ? '已保存模板'
-                : configuration?.source === 'current'
-                  ? '从本机配置提取'
-                  : '尚未保存模板'}
-            </Badge>
-            {dirty && <Badge variant="outline">未保存</Badge>}
-          </div>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button type="button" variant="outline" size="sm" disabled={busy || loading}>
-                <Download aria-hidden="true" />
-                从本机配置提取
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>从本机配置提取共通配置？</AlertDialogTitle>
-                <AlertDialogDescription>
-                  将读取本机 {toolName}{' '}
-                  配置，去除供应商字段后替换编辑器中的内容。尚未保存的编辑会丢失；保存仅更新应用中的共用模板。
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>取消</AlertDialogCancel>
-                <AlertDialogAction onClick={() => void importCurrent()}>确认提取</AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
         {error && (
           <Alert variant="destructive">
             <AlertCircle aria-hidden="true" />
@@ -361,34 +321,66 @@ function CommonConfigEditor({
                   </AlertDescription>
                 </Alert>
               )}
-              <section className="space-y-4" aria-label="快捷修改">
-                <div>
-                  <h3 className="text-sm font-medium">快捷修改</h3>
-                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                    常用选项的修改会立即反映在下方原文中，保存后才会写入配置。
-                  </p>
-                </div>
-                {root ? (
-                  <CommonOptionsForm
-                    key={configuration.revision}
-                    toolId={toolId}
-                    root={root}
-                    onChange={(value) => setContent(serializeConfiguration(toolId, value))}
-                    disabled={busy || configuration.conflicts.length > 0}
-                  />
-                ) : (
-                  <Alert variant="destructive">
-                    <AlertDescription>
-                      原文格式无效，请在下方修复后继续使用快捷修改。未保存任何内容。
-                    </AlertDescription>
-                  </Alert>
-                )}
-              </section>
-              <section className="border-t pt-5" aria-label="共通配置原文">
+              {!root && (
+                <Alert variant="destructive">
+                  <AlertDescription>
+                    原文格式无效，请直接修复下方内容后再保存。未保存任何内容。
+                  </AlertDescription>
+                </Alert>
+              )}
+              <section aria-label="共通配置原文">
                 <Field className="min-w-0 gap-3">
-                  <FieldLabel htmlFor={`${toolId}-common-content`}>
-                    {toolName} 共通配置原文
-                  </FieldLabel>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <FieldLabel htmlFor={`${toolId}-common-content`}>
+                      {toolName} 共通配置原文
+                    </FieldLabel>
+                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                      {dirty && <Badge variant="outline">未保存</Badge>}
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={busy || loading}
+                          >
+                            <Download aria-hidden="true" />
+                            从本机配置提取
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>从本机配置提取共通配置？</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              将读取本机 {toolName}{' '}
+                              配置，去除供应商字段后替换编辑器中的内容。尚未保存的编辑会丢失；保存仅更新应用中的共用模板。
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>取消</AlertDialogCancel>
+                            <AlertDialogAction onClick={() => void importCurrent()}>
+                              确认提取
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => void save()}
+                        disabled={
+                          busy ||
+                          loading ||
+                          !configuration ||
+                          !root ||
+                          configuration.conflicts.length > 0
+                        }
+                      >
+                        <Save aria-hidden="true" />
+                        保存共通配置
+                      </Button>
+                    </div>
+                  </div>
                   <Textarea
                     id={`${toolId}-common-content`}
                     value={content}
@@ -405,7 +397,7 @@ function CommonConfigEditor({
                     className="text-xs leading-6"
                   >
                     {baseToolId(toolId) === 'claude-code'
-                      ? '共通字段与表单共享同一草稿；保留未知字段，供应商连接、路由与模型选项请在供应商侧设置。'
+                      ? '保留未知字段，供应商连接、路由与模型选项请在供应商侧设置。'
                       : '可管理审批、沙箱、历史和 MCP 等字段；不能包含 model、model_provider、model_providers，供应商地址和 API Key 统一由 config.toml 中的供应商配置管理。'}
                     <span className="block">
                       保存仅更新应用中的共用模板。在本机或 WSL
@@ -414,32 +406,9 @@ function CommonConfigEditor({
                   </FieldDescription>
                 </Field>
               </section>
-              <p className="text-xs leading-6 break-all text-muted-foreground">
-                通用模板保存到应用，应用供应商时写入工具配置。
-              </p>
             </div>
           )
         )}
-        <div className="flex flex-wrap items-center justify-between gap-4 border-t pt-4">
-          <p className="text-xs leading-5 text-muted-foreground">
-            保存到 AI Switch，应用供应商时生效。
-          </p>
-          <Button
-            type="button"
-            onClick={() => void save()}
-            disabled={
-              busy ||
-              loading ||
-              !configuration ||
-              !dirty ||
-              !root ||
-              configuration.conflicts.length > 0
-            }
-          >
-            <Save aria-hidden="true" />
-            保存共通配置
-          </Button>
-        </div>
       </CardContent>
     </Card>
   )
