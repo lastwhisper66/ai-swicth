@@ -43,6 +43,7 @@ interface SettingsPageProps {
   onAddProvider: (toolId: ToolId) => void
   onEditProvider: (provider: ProviderSummary, toolId: ToolId) => void
   onDeleteProvider: (providerId: string) => void
+  onMoveProvider: (providerId: string, targetId: string) => Promise<void>
   onPickPath: (toolId: ToolId) => void
   onResetPath: (toolId: ToolId) => void
   onOpenLocation: (input: OpenToolLocationInput) => void
@@ -102,6 +103,7 @@ export function SettingsPage({
   onAddProvider,
   onEditProvider,
   onDeleteProvider,
+  onMoveProvider,
   onPickPath,
   onResetPath,
   onOpenLocation,
@@ -159,6 +161,7 @@ export function SettingsPage({
               onAdd={onAddProvider}
               onEdit={onEditProvider}
               onDelete={onDeleteProvider}
+              onMove={onMoveProvider}
             />
           ))
         ) : section === 'common' ? (

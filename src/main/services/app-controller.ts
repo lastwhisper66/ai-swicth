@@ -23,6 +23,8 @@ import type {
   SaveCommonConfigResult,
   PreviewConfigInput,
   DeleteProviderInput,
+  SetProviderOrderInput,
+  ProviderSummary,
   OperationResponse,
   OpenToolLocationInput,
   PickToolPathInput,
@@ -199,6 +201,13 @@ export class AppController {
     return this.withMutation(async () => {
       await this.providerStore.delete(input.id)
       return this.getSnapshot()
+    })
+  }
+
+  async setProviderOrder(input: SetProviderOrderInput): Promise<ProviderSummary[]> {
+    return this.withMutation(async () => {
+      this.providerStore.setOrder(input.order)
+      return this.providerStore.list()
     })
   }
 

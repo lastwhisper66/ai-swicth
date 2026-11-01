@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { Copy, Minus, Square, X } from 'lucide-react'
 import { toast } from 'sonner'
 import type { ApiResult } from '@shared/ipc'
-import { AppIcon } from '@renderer/components/AppIcon'
 import { ModeToggle } from '@renderer/components/ModeToggle'
 import { Button } from '@renderer/components/ui/button'
 
@@ -38,11 +37,7 @@ export function TitleBar(): React.JSX.Element {
   }
 
   return (
-    <header className="app-titlebar flex h-11 shrink-0 items-center justify-between border-b bg-background select-none">
-      <div className="flex min-w-0 items-center gap-2.5 pl-4">
-        <AppIcon className="size-6" />
-        <span className="truncate text-xs font-semibold tracking-wide">AI Switch</span>
-      </div>
+    <header className="app-titlebar flex h-11 shrink-0 items-center justify-end border-b bg-background select-none">
       <div className="app-no-drag flex h-full shrink-0 items-stretch" aria-label="应用与窗口控制">
         <div className="flex items-center gap-1 border-r px-2">
           <ModeToggle />

@@ -20,10 +20,15 @@ export class ApplicationPreferencesStore {
     const result: ApplicationPreferences = {
       visible: Object.fromEntries(TOOL_IDS.map((id) => [id, true])) as Record<ToolId, boolean>,
       wsl: {},
-      order: [...APPLICATION_IDS]
+      order: [...APPLICATION_IDS],
+      sidebarCollapsed: false
     }
     if (saved === null) return result
     if (!isRecord(saved) || !isRecord(saved.visible) || !isRecord(saved.wsl)) throw corrupt()
+    if (saved.sidebarCollapsed !== undefined) {
+      if (typeof saved.sidebarCollapsed !== 'boolean') throw corrupt()
+      result.sidebarCollapsed = saved.sidebarCollapsed
+    }
     if (saved.order !== undefined) {
       if (
         !Array.isArray(saved.order) ||
@@ -77,6 +82,13 @@ export class ApplicationPreferencesStore {
   setOrder(order: ApplicationId[]): ApplicationPreferences {
     const next = this.get()
     next.order = [...order]
+    this.database.setSetting('device_settings', 'applications', next)
+    return next
+  }
+
+  setSidebarCollapsed(collapsed: boolean): ApplicationPreferences {
+    const next = this.get()
+    next.sidebarCollapsed = collapsed
     this.database.setSetting('device_settings', 'applications', next)
     return next
   }

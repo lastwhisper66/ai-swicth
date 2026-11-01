@@ -10,6 +10,7 @@ export const IPC_CHANNELS = {
   getApplicationTasks: 'applications:tasks',
   setApplicationVisibility: 'applications:set-visibility',
   setApplicationOrder: 'applications:set-order',
+  setSidebarCollapsed: 'applications:set-sidebar-collapsed',
   setWslLaunchSettings: 'applications:set-wsl-launch',
   startApplicationTask: 'applications:start-task',
   setAppSettings: 'app:set-settings',
@@ -32,6 +33,7 @@ export const IPC_CHANNELS = {
   updateProvider: 'providers:update',
   getProviderSecrets: 'providers:get-secrets',
   deleteProvider: 'providers:delete',
+  setProviderOrder: 'providers:set-order',
   pickToolPath: 'tools:pick-path',
   setToolPath: 'tools:set-path',
   resetToolPath: 'tools:reset-path',
@@ -69,6 +71,15 @@ export interface ApplicationPreferences {
   visible: Record<ToolId, boolean>
   wsl: Record<string, WslLaunchSettings>
   order: ApplicationId[]
+  sidebarCollapsed: boolean
+}
+
+export interface SetSidebarCollapsedInput {
+  collapsed: boolean
+}
+
+export interface SetProviderOrderInput {
+  order: string[]
 }
 
 export interface SetApplicationOrderInput {
@@ -497,6 +508,9 @@ export interface DesktopApi {
   setApplicationOrder: (
     input: SetApplicationOrderInput
   ) => Promise<ApiResult<ApplicationPreferences>>
+  setSidebarCollapsed: (
+    input: SetSidebarCollapsedInput
+  ) => Promise<ApiResult<ApplicationPreferences>>
   setWslLaunchSettings: (input: SetWslLaunchSettingsInput) => Promise<ApiResult<void>>
   startApplicationTask: (input: StartApplicationTaskInput) => Promise<ApiResult<ApplicationTask>>
   onApplicationTaskChanged: (listener: (task: ApplicationTask) => void) => () => void
@@ -531,6 +545,7 @@ export interface DesktopApi {
   updateProvider: (input: UpdateProviderInput) => Promise<ApiResult<AppSnapshot>>
   getProviderSecrets: (input: GetProviderSecretsInput) => Promise<ApiResult<ProviderSecrets>>
   deleteProvider: (input: DeleteProviderInput) => Promise<ApiResult<AppSnapshot>>
+  setProviderOrder: (input: SetProviderOrderInput) => Promise<ApiResult<ProviderSummary[]>>
   pickToolPath: (input: PickToolPathInput) => Promise<ApiResult<string | null>>
   setToolPath: (input: SetToolPathInput) => Promise<ApiResult<AppSnapshot>>
   resetToolPath: (input: ResetToolPathInput) => Promise<ApiResult<AppSnapshot>>

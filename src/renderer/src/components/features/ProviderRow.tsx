@@ -9,7 +9,7 @@ import {
   Play,
   Trash2
 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { ProviderSummary, ToolId } from '@shared/ipc'
 import { baseToolId } from '@shared/ipc'
 import { nativeModel } from '@shared/configuration'
@@ -50,6 +50,7 @@ interface ProviderRowProps {
   onApply?: (modelId: string) => void
   currentModelId?: string | null
   usageLabels?: string[]
+  dragHandle?: ReactNode
   onEdit: () => void
   onDelete: () => void
 }
@@ -65,7 +66,8 @@ export function ProviderRow({
   onEdit,
   onDelete,
   currentModelId,
-  usageLabels
+  usageLabels,
+  dragHandle
 }: ProviderRowProps): React.JSX.Element {
   const config = provider.configurations[baseToolId(toolId)]!
   const [selectedModelId, setSelectedModelId] = useState<string>()
@@ -82,6 +84,7 @@ export function ProviderRow({
         isCurrent && 'border-emerald-600/30 bg-emerald-50/30 dark:bg-emerald-950/15'
       )}
     >
+      {dragHandle && <div className="shrink-0 self-start">{dragHandle}</div>}
       <ItemContent className="min-w-0 basis-72 gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h3 className="min-w-0 truncate text-base font-semibold" title={provider.name}>

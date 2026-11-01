@@ -39,9 +39,24 @@ export class ProviderStore {
   constructor(private readonly database: AppDatabase) {}
 
   async list(): Promise<ProviderSummary[]> {
-    return (await this.load()).providers
-      .map(toSummary)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    return (await this.load()).providers.map(toSummary)
+  }
+
+  setOrder(order: string[]): void {
+    this.database.transaction(() => {
+      const existing = this.database.sql.prepare('SELECT id FROM providers').all() as Array<{
+        id: string
+      }>
+      const ids = new Set(existing.map((provider) => provider.id))
+      if (
+        order.length !== ids.size ||
+        new Set(order).size !== ids.size ||
+        order.some((id) => !ids.has(id))
+      )
+        throw new AppError('INVALID_INPUT', '供应商列表已变化，请刷新页面后重新排序。')
+      const update = this.database.sql.prepare('UPDATE providers SET position = ? WHERE id = ?')
+      order.forEach((id, index) => update.run(index, id))
+    })
   }
 
   async create(input: CreateProviderInput): Promise<ProviderSummary> {

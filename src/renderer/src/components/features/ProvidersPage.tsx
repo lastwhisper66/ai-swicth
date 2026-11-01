@@ -12,6 +12,7 @@ import {
 } from '@renderer/components/ui/empty'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@renderer/components/ui/tabs'
 import { ProviderRow } from './ProviderRow'
+import { SortableList } from '@renderer/components/SortableList'
 
 interface ProvidersPageProps {
   providers: ProviderSummary[]
@@ -22,6 +23,7 @@ interface ProvidersPageProps {
   onAdd: (toolId: ToolId) => void
   onEdit: (provider: ProviderSummary, toolId: ToolId) => void
   onDelete: (providerId: string) => void
+  onMove: (providerId: string, targetId: string) => Promise<void>
 }
 
 export function ProvidersPage({
@@ -32,7 +34,8 @@ export function ProvidersPage({
   onToolChange,
   onAdd,
   onEdit,
-  onDelete
+  onDelete,
+  onMove
 }: ProvidersPageProps): React.JSX.Element {
   return (
     <div className="space-y-5">
@@ -74,7 +77,10 @@ export function ProvidersPage({
           return (
             <TabsContent key={id} value={id} className="space-y-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="text-sm font-medium">{toolName} 供应商</p>
+                <div>
+                  <p className="text-sm font-medium">{toolName} 供应商</p>
+                  <p className="mt-1 text-xs text-muted-foreground">拖动手柄排序，与首页同步。</p>
+                </div>
                 <Button onClick={() => onAdd(id)} disabled={busy}>
                   <Plus aria-hidden="true" />
                   添加 {toolName} 供应商
@@ -93,31 +99,35 @@ export function ProvidersPage({
                   </EmptyHeader>
                 </Empty>
               ) : (
-                <ul
-                  className="grid list-none grid-cols-1 gap-3 p-0"
-                  aria-label={`${toolName} 供应商设置`}
-                >
-                  {toolProviders.map((provider) => {
+                <SortableList
+                  items={toolProviders.map((provider) => ({
+                    id: provider.id,
+                    label: provider.name
+                  }))}
+                  label={`${toolName} 供应商设置`}
+                  disabled={busy}
+                  onMove={onMove}
+                  renderItem={(providerId, handle) => {
+                    const provider = toolProviders.find((provider) => provider.id === providerId)!
                     const activeTools = Object.values(tools).filter(
                       (tool) =>
                         baseToolId(tool.toolId) === id && tool.currentProviderId === provider.id
                     )
                     return (
-                      <li key={provider.id} className="min-w-0">
-                        <ProviderRow
-                          provider={provider}
-                          toolId={id}
-                          busy={busy}
-                          isCurrent={activeTools.length > 0}
-                          currentModelId={activeTools[0]?.currentModelId ?? null}
-                          usageLabels={activeTools.map((tool) => TOOL_NAMES[tool.toolId])}
-                          onEdit={() => onEdit(provider, id)}
-                          onDelete={() => onDelete(provider.id)}
-                        />
-                      </li>
+                      <ProviderRow
+                        provider={provider}
+                        toolId={id}
+                        busy={busy}
+                        dragHandle={handle}
+                        isCurrent={activeTools.length > 0}
+                        currentModelId={activeTools[0]?.currentModelId ?? null}
+                        usageLabels={activeTools.map((tool) => TOOL_NAMES[tool.toolId])}
+                        onEdit={() => onEdit(provider, id)}
+                        onDelete={() => onDelete(provider.id)}
+                      />
                     )
-                  })}
-                </ul>
+                  }}
+                />
               )}
             </TabsContent>
           )

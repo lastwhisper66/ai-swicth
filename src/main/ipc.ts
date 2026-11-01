@@ -13,6 +13,7 @@ import {
   type ApplicationDetectionResult,
   type SetApplicationVisibilityInput,
   type SetApplicationOrderInput,
+  type SetProviderOrderInput,
   type SetWslLaunchSettingsInput,
   type StartApplicationTaskInput,
   type ApiResult,
@@ -97,6 +98,12 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
     rendererUrl,
     parseWslLaunchSettings,
     (input) => controller.setWslLaunchSettings(input)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.setSidebarCollapsed,
+    rendererUrl,
+    (args) => ({ collapsed: expectBoolean(expectRecordArgument(args).collapsed) }),
+    async (input) => controller.applications.preferences.setSidebarCollapsed(input.collapsed)
   )
   registerBusinessHandler(
     IPC_CHANNELS.startApplicationTask,
@@ -226,6 +233,18 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
   )
   registerBusinessHandler(IPC_CHANNELS.deleteProvider, rendererUrl, parseDeleteProvider, (input) =>
     controller.deleteProvider(input)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.setProviderOrder,
+    rendererUrl,
+    (args): SetProviderOrderInput => {
+      const input = expectRecordArgument(args)
+      if (!Array.isArray(input.order)) throw invalidRequest()
+      const order = input.order.map(expectIdentifier)
+      if (new Set(order).size !== order.length) throw invalidRequest()
+      return { order }
+    },
+    (input) => controller.setProviderOrder(input)
   )
   registerBusinessHandler(
     IPC_CHANNELS.pickToolPath,

@@ -16,6 +16,7 @@ import {
   EmptyTitle
 } from '@renderer/components/ui/empty'
 import { ProviderRow } from './ProviderRow'
+import { SortableList } from '@renderer/components/SortableList'
 import { InstallationBadge, ToolInstallationStatus } from './ToolInstallationStatus'
 
 interface ToolConfigPageProps {
@@ -30,6 +31,7 @@ interface ToolConfigPageProps {
   onAdd: (toolId: ToolId) => void
   onEdit: (provider: ProviderSummary) => void
   onDelete: (providerId: string) => void
+  onMove: (providerId: string, targetId: string) => Promise<void>
 }
 
 const toolDetails = {
@@ -62,7 +64,8 @@ export function ToolConfigPage({
   onApply,
   onAdd,
   onEdit,
-  onDelete
+  onDelete,
+  onMove
 }: ToolConfigPageProps): React.JSX.Element {
   const details = toolDetails[toolId]
   const compatibleProviders =
@@ -155,6 +158,7 @@ export function ToolConfigPage({
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
               点击“应用”切换 {details.name} 使用的供应商。
+              <span className="ml-1">拖动手柄排序，与设置同步。</span>
             </p>
           </div>
           {compatibleProviders.length > 0 && (
@@ -187,12 +191,17 @@ export function ToolConfigPage({
             </EmptyContent>
           </Empty>
         ) : (
-          <ul
-            className="grid list-none grid-cols-1 gap-3 p-0"
-            aria-label={`${details.name} 供应商`}
-          >
-            {compatibleProviders.map((provider) => (
-              <li key={provider.id} className="min-w-0">
+          <SortableList
+            items={compatibleProviders.map((provider) => ({
+              id: provider.id,
+              label: provider.name
+            }))}
+            label={`${details.name} 供应商`}
+            disabled={busy}
+            onMove={onMove}
+            renderItem={(providerId, handle) => {
+              const provider = compatibleProviders.find((provider) => provider.id === providerId)!
+              return (
                 <ProviderRow
                   provider={provider}
                   toolId={toolId}
@@ -202,14 +211,15 @@ export function ToolConfigPage({
                   }
                   pending={provider.id === pendingProviderId}
                   busy={busy}
+                  dragHandle={handle}
                   applyDisabled={!status}
                   onApply={(modelId) => onApply(toolId, provider.id, modelId)}
                   onEdit={() => onEdit(provider)}
                   onDelete={() => onDelete(provider.id)}
                 />
-              </li>
-            ))}
-          </ul>
+              )
+            }}
+          />
         )}
       </section>
     </div>

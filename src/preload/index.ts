@@ -24,6 +24,7 @@ const api: DesktopApi = {
   setApplicationVisibility: (input) =>
     ipcRenderer.invoke(IPC_CHANNELS.setApplicationVisibility, input),
   setApplicationOrder: (input) => ipcRenderer.invoke(IPC_CHANNELS.setApplicationOrder, input),
+  setSidebarCollapsed: (input) => ipcRenderer.invoke(IPC_CHANNELS.setSidebarCollapsed, input),
   setWslLaunchSettings: (input) => ipcRenderer.invoke(IPC_CHANNELS.setWslLaunchSettings, input),
   startApplicationTask: (input) => ipcRenderer.invoke(IPC_CHANNELS.startApplicationTask, input),
   onApplicationTaskChanged: (listener) => {
@@ -65,6 +66,7 @@ const api: DesktopApi = {
   updateProvider: (input) => ipcRenderer.invoke(IPC_CHANNELS.updateProvider, input),
   getProviderSecrets: (input) => ipcRenderer.invoke(IPC_CHANNELS.getProviderSecrets, input),
   deleteProvider: (input) => ipcRenderer.invoke(IPC_CHANNELS.deleteProvider, input),
+  setProviderOrder: (input) => ipcRenderer.invoke(IPC_CHANNELS.setProviderOrder, input),
   pickToolPath: (input) => ipcRenderer.invoke(IPC_CHANNELS.pickToolPath, input),
   setToolPath: (input) => ipcRenderer.invoke(IPC_CHANNELS.setToolPath, input),
   resetToolPath: (input) => ipcRenderer.invoke(IPC_CHANNELS.resetToolPath, input),

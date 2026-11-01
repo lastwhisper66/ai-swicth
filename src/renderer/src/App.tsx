@@ -27,13 +27,15 @@ import { Button } from '@renderer/components/ui/button'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { useAppBootstrap } from '@renderer/hooks/use-app-bootstrap'
 import { useApplications } from '@renderer/hooks/use-applications'
+import { moveItem } from '@renderer/lib/sort-order'
 
 type ProviderEditorState = { provider: ProviderSummary | null; toolId: ToolId } | null
 type MainView = ToolId | 'settings' | 'applications'
 const initialPreferences: ApplicationPreferences = {
   visible: Object.fromEntries(TOOL_IDS.map((id) => [id, true])) as Record<ToolId, boolean>,
   wsl: {},
-  order: [...APPLICATION_IDS]
+  order: [...APPLICATION_IDS],
+  sidebarCollapsed: false
 }
 
 function App(): React.JSX.Element {
@@ -55,6 +57,11 @@ function App(): React.JSX.Element {
   const applicationList = useApplications(applicationTasks, view === 'applications')
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
   const [pendingKey, setPendingKey] = useState<string | null>(null)
+  const [collapseSaving, setCollapseSaving] = useState(false)
+  const [applicationOrderSaving, setApplicationOrderSaving] = useState(false)
+  const savingApplicationOrder = useRef(false)
+  const savingProviderOrder = useRef(false)
+  const savingCollapsed = useRef(false)
 
   useEffect(() => {
     let active = true
@@ -155,6 +162,9 @@ function App(): React.JSX.Element {
   }
 
   async function setApplicationOrder(order: ApplicationId[]): Promise<boolean> {
+    if (savingApplicationOrder.current) return false
+    savingApplicationOrder.current = true
+    setApplicationOrderSaving(true)
     try {
       const response = await window.api.setApplicationOrder({ order })
       if (!response.ok) {
@@ -176,6 +186,71 @@ function App(): React.JSX.Element {
     } catch {
       showError('无法保存应用顺序，请完整重启应用后重试。')
       return false
+    } finally {
+      savingApplicationOrder.current = false
+      setApplicationOrderSaving(false)
+    }
+  }
+
+  async function setSidebarCollapsed(collapsed: boolean): Promise<void> {
+    if (!snapshot || savingCollapsed.current) return
+    const previousCollapsed = snapshot.applicationPreferences.sidebarCollapsed
+    const updateCollapsed = (value: boolean): void =>
+      setSnapshot((previous) =>
+        previous
+          ? {
+              ...previous,
+              applicationPreferences: {
+                ...previous.applicationPreferences,
+                sidebarCollapsed: value
+              }
+            }
+          : previous
+      )
+    savingCollapsed.current = true
+    setCollapseSaving(true)
+    updateCollapsed(collapsed)
+    try {
+      const response = await window.api.setSidebarCollapsed({ collapsed })
+      if (!response.ok) {
+        updateCollapsed(previousCollapsed)
+        showError(response.error.message)
+      }
+    } catch {
+      updateCollapsed(previousCollapsed)
+      showError('无法保存侧边栏状态，请完整重启应用后重试。')
+    } finally {
+      savingCollapsed.current = false
+      setCollapseSaving(false)
+    }
+  }
+
+  async function moveProvider(providerId: string, targetId: string): Promise<void> {
+    if (!snapshot || pendingKey || savingProviderOrder.current) return
+    const previous = snapshot.providers
+    const order = previous.map((provider) => provider.id)
+    const nextOrder = moveItem(order, providerId, targetId)
+    if (nextOrder === order) return
+    const byId = new Map(previous.map((provider) => [provider.id, provider]))
+    const updateProviders = (providers: ProviderSummary[]): void =>
+      setSnapshot((current) => (current ? { ...current, providers } : current))
+    savingProviderOrder.current = true
+    setPendingKey('providers:order')
+    updateProviders(nextOrder.map((id) => byId.get(id)!))
+    try {
+      const response = await window.api.setProviderOrder({ order: nextOrder })
+      if (!response.ok) {
+        updateProviders(previous)
+        showError(response.error.message)
+        return
+      }
+      updateProviders(response.value)
+    } catch {
+      updateProviders(previous)
+      showError('无法保存供应商顺序，请完整重启应用后重试。')
+    } finally {
+      savingProviderOrder.current = false
+      setPendingKey(null)
     }
   }
 
@@ -413,18 +488,22 @@ function App(): React.JSX.Element {
 
   return (
     <TooltipProvider>
-      <div className="flex h-svh min-w-0 flex-col overflow-hidden">
-        <TitleBar />
-        <div className="flex min-h-0 flex-1">
-          <AppSidebar
-            view={view}
-            visible={snapshot?.applicationPreferences.visible ?? initialPreferences.visible}
-            busy={pendingKey !== null}
-            onViewChange={(nextView) => {
-              if (nextView === 'settings') setSettingsSection('general')
-              setView(nextView)
-            }}
-          />
+      <div className="flex h-svh min-w-0 overflow-hidden">
+        <AppSidebar
+          view={view}
+          preferences={snapshot?.applicationPreferences ?? initialPreferences}
+          ready={!!snapshot && !applicationOrderSaving}
+          busy={pendingKey !== null}
+          collapseSaving={collapseSaving}
+          onCollapsedChange={(collapsed) => void setSidebarCollapsed(collapsed)}
+          onOrderChange={setApplicationOrder}
+          onViewChange={(nextView) => {
+            if (nextView === 'settings') setSettingsSection('general')
+            setView(nextView)
+          }}
+        />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <TitleBar />
           <main className="min-h-0 min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both">
             <div className="w-full min-w-0 px-5 py-6 lg:px-8 lg:py-8">
               {connectionError && (
@@ -441,7 +520,7 @@ function App(): React.JSX.Element {
                 <ApplicationsPage
                   list={applicationList}
                   preferences={snapshot?.applicationPreferences ?? initialPreferences}
-                  preferencesReady={!!snapshot}
+                  preferencesReady={!!snapshot && !applicationOrderSaving}
                   tasks={applicationTasks}
                   onVisibilityChange={setApplicationVisibility}
                   onOrderChange={setApplicationOrder}
@@ -496,6 +575,7 @@ function App(): React.JSX.Element {
                   onAddProvider={openProviderEditor}
                   onEditProvider={(provider, toolId) => openProviderEditor(toolId, provider)}
                   onDeleteProvider={(providerId) => void deleteProvider(providerId)}
+                  onMoveProvider={moveProvider}
                   onPickPath={(toolId) => void pickPath(toolId)}
                   onResetPath={(toolId) => void resetPath(toolId)}
                   onOpenLocation={(input) => void openToolLocation(input)}
@@ -543,6 +623,7 @@ function App(): React.JSX.Element {
                   onAdd={openProviderEditor}
                   onEdit={(provider) => openProviderEditor(view, provider)}
                   onDelete={(providerId) => void deleteProvider(providerId)}
+                  onMove={moveProvider}
                 />
               )}
             </div>
