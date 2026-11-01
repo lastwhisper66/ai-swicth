@@ -1,7 +1,7 @@
 import { TOOL_NAMES } from '@shared/ipc'
 import { baseToolId } from '@shared/ipc'
 import { useEffect, useState } from 'react'
-import { AlertCircle, Download, Save } from 'lucide-react'
+import { AlertCircle, ChevronDown, Download, Save, SlidersHorizontal } from 'lucide-react'
 import {
   PROVIDER_TOOL_IDS,
   type AppSnapshot,
@@ -9,9 +9,16 @@ import {
   type ProviderSummary,
   type ProviderToolId
 } from '@shared/ipc'
-import { nativeModel, parseConfiguration, type ConfigObject } from '@shared/configuration'
+import {
+  codexCommonError,
+  nativeModel,
+  parseConfiguration,
+  serializeConfiguration,
+  type ConfigObject
+} from '@shared/configuration'
 import { modelPresetChoices } from '@renderer/lib/provider-form'
 import { ConfigurationSelect } from './ConfigurationSelect'
+import { CodexQuickSettings } from './CodexQuickSettings'
 import { ToolIcon } from '@renderer/components/ToolIcon'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import {
@@ -111,6 +118,7 @@ function CommonConfigEditor({
   const [reload, setReload] = useState(0)
   const [migrationProviderId, setMigrationProviderId] = useState('')
   const [migrationModelId, setMigrationModelId] = useState('')
+  const [quickSettingsOpen, setQuickSettingsOpen] = useState(false)
   const toolName = TOOL_NAMES[toolId]
   const dirty =
     configuration !== null &&
@@ -121,6 +129,7 @@ function CommonConfigEditor({
   } catch {
     /* Advanced editor remains available to repair the draft. */
   }
+  const quickSettingsError = toolId === 'codex' && root ? codexCommonError(root) : null
   const compatibleProviders = providers.filter((provider) =>
     provider.tools.includes(baseToolId(toolId))
   )
@@ -328,6 +337,11 @@ function CommonConfigEditor({
                   </AlertDescription>
                 </Alert>
               )}
+              {quickSettingsError && (
+                <Alert variant="destructive">
+                  <AlertDescription>{quickSettingsError}</AlertDescription>
+                </Alert>
+              )}
               <section aria-label="共通配置原文">
                 <Field className="min-w-0 gap-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -336,6 +350,23 @@ function CommonConfigEditor({
                     </FieldLabel>
                     <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                       {dirty && <Badge variant="outline">未保存</Badge>}
+                      {toolId === 'codex' && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          aria-expanded={quickSettingsOpen}
+                          aria-controls="codex-quick-settings"
+                          onClick={() => setQuickSettingsOpen((open) => !open)}
+                        >
+                          <SlidersHorizontal aria-hidden="true" />
+                          快捷设置
+                          <ChevronDown
+                            aria-hidden="true"
+                            className={quickSettingsOpen ? 'rotate-180' : undefined}
+                          />
+                        </Button>
+                      )}
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
                           <Button
@@ -373,6 +404,7 @@ function CommonConfigEditor({
                           loading ||
                           !configuration ||
                           !root ||
+                          Boolean(quickSettingsError) ||
                           configuration.conflicts.length > 0
                         }
                       >
@@ -381,6 +413,15 @@ function CommonConfigEditor({
                       </Button>
                     </div>
                   </div>
+                  {toolId === 'codex' && quickSettingsOpen && (
+                    <div id="codex-quick-settings" role="region" aria-label="Codex 快捷设置">
+                      <CodexQuickSettings
+                        root={root}
+                        disabled={busy}
+                        onChange={(next) => setContent(serializeConfiguration(toolId, next))}
+                      />
+                    </div>
+                  )}
                   <Textarea
                     id={`${toolId}-common-content`}
                     value={content}

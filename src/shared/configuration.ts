@@ -13,8 +13,8 @@ export const CODEX_EFFORTS = [
   'max',
   'ultra'
 ] as const
-export const REASONING_SUMMARIES = ['auto', 'concise', 'detailed', 'none'] as const
-export const VERBOSITIES = ['low', 'medium', 'high'] as const
+export const CODEX_CONTEXT_WINDOW = 1_000_000
+export const CODEX_DEFAULT_COMPACT_LIMIT = 900_000
 export const ROUTE_KEYS = ['opus', 'sonnet', 'haiku', 'subagent'] as const
 export const ROUTE_ENV = {
   opus: 'ANTHROPIC_DEFAULT_OPUS_MODEL',
@@ -25,11 +25,6 @@ export const ROUTE_ENV = {
 
 export interface ModelOptions {
   context1m?: true
-  fast?: boolean
-  autoCompact?: boolean
-  planEffort?: string
-  reasoningSummary?: (typeof REASONING_SUMMARIES)[number]
-  verbosity?: (typeof VERBOSITIES)[number]
 }
 
 export interface ModelPreset {
@@ -60,7 +55,6 @@ export interface ProviderToolConfiguration<H = HeaderSummary> {
   models: ModelPreset[]
   defaultModelId: string
   headers: H[]
-  supportsWebsockets?: boolean
   routes?: Partial<Record<(typeof ROUTE_KEYS)[number], string>>
 }
 
@@ -135,13 +129,45 @@ export function serializeConfiguration(toolId: ToolId, root: ConfigObject): stri
   return baseToolId(toolId) === 'codex' ? stringify(root) : `${JSON.stringify(root, null, 2)}\n`
 }
 
-export const CODEX_MODEL_ROOT = [
-  'model_context_window',
-  'service_tier',
-  'plan_mode_reasoning_effort',
-  'model_reasoning_summary',
-  'model_verbosity'
-] as const
+export const CODEX_COMMON_PATHS: ConfigPath[] = [
+  ['model_context_window'],
+  ['model_auto_compact_token_limit'],
+  ['service_tier'],
+  ['features', 'fast_mode']
+]
+
+export function codexCommonError(root: ConfigObject): string | null {
+  const contextWindow = root.model_context_window
+  const compactLimit = root.model_auto_compact_token_limit
+  if (
+    contextWindow !== undefined &&
+    (typeof contextWindow !== 'number' || !Number.isSafeInteger(contextWindow) || contextWindow < 1)
+  )
+    return 'model_context_window 必须为正整数（tokens）。'
+  if (
+    compactLimit !== undefined &&
+    (typeof compactLimit !== 'number' || !Number.isSafeInteger(compactLimit) || compactLimit < 1)
+  )
+    return '自动压缩阈值必须为正整数（tokens），请填写 model_auto_compact_token_limit。'
+  if (
+    typeof contextWindow === 'number' &&
+    typeof compactLimit === 'number' &&
+    compactLimit > contextWindow
+  )
+    return '自动压缩阈值不能超过上下文窗口大小。'
+  if (
+    root.service_tier !== undefined &&
+    (typeof root.service_tier !== 'string' || !root.service_tier.trim())
+  )
+    return 'service_tier 必须为非空字符串。'
+  if (
+    isObject(root.features) &&
+    root.features.fast_mode !== undefined &&
+    typeof root.features.fast_mode !== 'boolean'
+  )
+    return 'features.fast_mode 必须为 true 或 false。'
+  return null
+}
 
 /** Only the fields in this release are owned; unknown modelSettings children remain untouched. */
 export function providerOptionPaths(toolId: ToolId, root: ConfigObject): ConfigPath[] {
@@ -149,15 +175,7 @@ export function providerOptionPaths(toolId: ToolId, root: ConfigObject): ConfigP
   const add = (path: ConfigPath): void => {
     if (readField(root, path).exists) paths.push(path)
   }
-  if (baseToolId(toolId) === 'codex') {
-    CODEX_MODEL_ROOT.forEach((key) => {
-      // Other context sizes and service tiers stay in the advanced editor.
-      if (key === 'model_context_window' && root[key] !== 1000000) return
-      if (key === 'service_tier' && !['fast', 'default'].includes(root[key] as string)) return
-      add([key])
-    })
-    add(['features', 'fast_mode'])
-  } else {
+  if (baseToolId(toolId) === 'claude-code') {
     add(['env', 'ANTHROPIC_CUSTOM_HEADERS'])
     Object.values(ROUTE_ENV).forEach((key) => add(['env', key]))
   }
@@ -172,17 +190,6 @@ export function nativeModel(toolId: ToolId, preset: ModelPreset): string {
   if (baseToolId(toolId) !== 'claude-code') return preset.model
   const model = claudeBaseModel(preset.model)
   return preset.options.context1m ? `${model}[1m]` : model
-}
-
-/** Verified API model levels plus Codex's documented orchestration level (ultra). */
-export function codexEfforts(model: string): readonly string[] {
-  const name = model.replace(/-\d{4}-\d{2}-\d{2}$/u, '')
-  if (name === 'gpt-5.4') return ['none', 'low', 'medium', 'high', 'xhigh']
-  if (name === 'gpt-6-luna') return ['none', 'low', 'medium', 'high', 'xhigh', 'max']
-  if (name === 'gpt-6-sol') return ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
-  if (name === 'gpt-6.1-sol' || name === 'gpt-6-astra')
-    return ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
-  return []
 }
 
 export type AttributionStatus = 'default' | 'hidden' | 'custom'

@@ -1,8 +1,12 @@
-import { nativeModel, type ModelPreset } from '@shared/configuration'
+import { nativeModel, type HeaderInput, type ModelPreset } from '@shared/configuration'
 import type { ToolId } from '@shared/ipc'
 
 export function createModelPreset(): ModelPreset {
   return { id: crypto.randomUUID(), model: '', options: {} }
+}
+
+export function createHeaderInput(): HeaderInput {
+  return { id: crypto.randomUUID(), name: '', value: { mode: 'replace', value: '' } }
 }
 
 /** Keep presets for the same API model distinguishable without saved display names. */
@@ -12,13 +16,7 @@ export function modelPresetChoices(toolId: ToolId, models: ModelPreset[]): [stri
     const apiModel = apiModels[index]
     if (apiModels.filter((model) => model === apiModel).length === 1) return apiModel
     const options = preset.options
-    const details = [
-      options.context1m && '1M',
-      options.fast !== undefined && `Fast ${options.fast ? '开启' : '关闭'}`,
-      options.planEffort && `计划思考 ${options.planEffort}`,
-      options.reasoningSummary && `思考摘要 ${options.reasoningSummary}`,
-      options.verbosity && `回复详细程度 ${options.verbosity}`
-    ].filter(Boolean)
+    const details = [options.context1m && '1M'].filter(Boolean)
     return `${apiModel}（${details.length ? details.join('，') : '未覆盖选项'}）`
   })
   return models.map((preset, index) => {

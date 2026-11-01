@@ -76,8 +76,8 @@ export function ToolConfigPage({
 
   return (
     <div className="space-y-6">
-      <Card className="overflow-hidden py-0">
-        <CardHeader className="border-b bg-muted/35 py-5">
+      <Card className="gap-0 overflow-hidden py-0">
+        <CardHeader className="bg-muted/35 py-5">
           <div className="flex min-w-0 items-start gap-3">
             <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border bg-background">
               <ToolIcon toolId={toolId} className="size-5" />
@@ -106,47 +106,28 @@ export function ToolConfigPage({
             </div>
           </div>
         </CardHeader>
-        <CardContent className="grid gap-4 py-5 sm:grid-cols-[1fr_1fr_1.5fr]">
-          <InfoItem
-            label="当前供应商"
-            value={
-              status
-                ? (status.currentProviderName ?? (status.isExternalConfig ? '外部配置' : '未配置'))
-                : '—'
-            }
-            loading={!status && !statusError}
-          />
-          <InfoItem
-            label="当前模型"
-            value={status?.model ?? '—'}
-            loading={!status && !statusError}
-            mono
-          />
-          <InfoItem
-            label="Base URL"
-            value={status?.baseUrl ?? '—'}
-            loading={!status && !statusError}
-            mono
-          />
-          {statusError && (
-            <Alert variant="destructive" className="sm:col-span-3">
-              <Info />
-              <AlertDescription>{statusError}</AlertDescription>
-              <Button size="sm" variant="outline" onClick={onRetry} disabled={busy}>
-                <RefreshCw />
-                重试
-              </Button>
-            </Alert>
-          )}
-          {status && showStatusMessage && (
-            <Alert className="bg-muted/25 sm:col-span-3" role="status">
-              <Info aria-hidden="true" />
-              <AlertDescription className="text-xs leading-5 wrap-anywhere">
-                {status.statusMessage}
-              </AlertDescription>
-            </Alert>
-          )}
-        </CardContent>
+        {(statusError || showStatusMessage) && (
+          <CardContent className="space-y-4 border-t py-5">
+            {statusError && (
+              <Alert variant="destructive">
+                <Info />
+                <AlertDescription>{statusError}</AlertDescription>
+                <Button size="sm" variant="outline" onClick={onRetry} disabled={busy}>
+                  <RefreshCw />
+                  重试
+                </Button>
+              </Alert>
+            )}
+            {status && showStatusMessage && (
+              <Alert className="bg-muted/25" role="status">
+                <Info aria-hidden="true" />
+                <AlertDescription className="text-xs leading-5 wrap-anywhere">
+                  {status.statusMessage}
+                </AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+        )}
       </Card>
 
       <section className="space-y-3">
@@ -222,37 +203,6 @@ export function ToolConfigPage({
           />
         )}
       </section>
-    </div>
-  )
-}
-
-function InfoItem({
-  label,
-  value,
-  mono = false,
-  loading = false
-}: {
-  label: string
-  value: string
-  mono?: boolean
-  loading?: boolean
-}): React.JSX.Element {
-  return (
-    <div className="min-w-0 space-y-1">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div
-        className={`truncate text-sm font-medium ${mono ? 'font-mono text-xs' : ''}`}
-        title={value}
-      >
-        {loading ? (
-          <>
-            <Spinner className="size-4" />
-            <span className="sr-only">正在确认</span>
-          </>
-        ) : (
-          value
-        )}
-      </div>
     </div>
   )
 }

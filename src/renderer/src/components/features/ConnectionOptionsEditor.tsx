@@ -2,7 +2,6 @@ import { baseToolId } from '@shared/ipc'
 import { Plus, Trash2 } from 'lucide-react'
 import type { ToolId } from '@shared/ipc'
 import {
-  DEFAULT_CHOICES,
   ROUTE_KEYS,
   type HeaderInput,
   type HeaderSummary,
@@ -12,7 +11,7 @@ import {
 import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
 import { Field, FieldDescription, FieldLabel } from '@renderer/components/ui/field'
-import { ConfigurationSelect } from './ConfigurationSelect'
+import { createHeaderInput } from '@renderer/lib/provider-form'
 
 export function ConnectionOptionsEditor({
   toolId,
@@ -47,10 +46,7 @@ export function ConnectionOptionsEditor({
           onClick={() =>
             onChange({
               ...configuration,
-              headers: [
-                ...configuration.headers,
-                { id: crypto.randomUUID(), name: '', value: { mode: 'replace', value: '' } }
-              ]
+              headers: [...configuration.headers, createHeaderInput()]
             })
           }
         >
@@ -60,7 +56,7 @@ export function ConnectionOptionsEditor({
       </div>
       <p className="text-xs leading-6 text-muted-foreground">
         已保存的值会自动填入，可直接编辑，点击删除移除此头。API Key 负责鉴权，请勿添加 Authorization
-        或 x-api-key。不保证覆盖 SDK 自动生成的头。
+        或 x-api-key。名称和值均留空的行不会保存；不保证覆盖 SDK 自动生成的头。
       </p>
       {configuration.headers.map((header, index) => {
         const savedValue = savedValues.find((saved) => saved.id === header.id)?.value ?? ''
@@ -132,24 +128,7 @@ export function ConnectionOptionsEditor({
           </div>
         )
       })}
-      {baseToolId(toolId) === 'codex' ? (
-        <ConfigurationSelect
-          label="Responses WebSocket 兼容能力"
-          value={
-            configuration.supportsWebsockets === undefined
-              ? 'default'
-              : String(configuration.supportsWebsockets)
-          }
-          choices={DEFAULT_CHOICES}
-          onChange={(value) => {
-            const next = { ...configuration }
-            if (value === 'default') delete next.supportsWebsockets
-            else next.supportsWebsockets = value === 'true'
-            onChange(next)
-          }}
-          hint="仅声明供应商是否支持 Responses WebSocket 传输，不检测网关。"
-        />
-      ) : (
+      {baseToolId(toolId) === 'claude-code' && (
         <div className="space-y-4 border-t pt-5">
           <h3 className="font-semibold">默认模型路由</h3>
           <p className="text-xs text-muted-foreground">

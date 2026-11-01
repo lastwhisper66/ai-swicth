@@ -2,6 +2,7 @@ import { baseToolId } from '@shared/ipc'
 import {
   hasControlCharacters,
   COMMON_FIELDS,
+  codexCommonError,
   isObject,
   readField,
   type ConfigObject
@@ -10,6 +11,10 @@ import type { ToolId } from '@shared/ipc'
 import { AppError } from '../errors'
 
 export function validateCommonFields(toolId: ToolId, root: ConfigObject): void {
+  if (baseToolId(toolId) === 'codex') {
+    const error = codexCommonError(root)
+    if (error) throw new AppError('INVALID_INPUT', error)
+  }
   for (const field of COMMON_FIELDS[baseToolId(toolId)]) {
     const entry = readField(root, field.path)
     if (!entry.exists) continue

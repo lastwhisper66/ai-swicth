@@ -5,7 +5,7 @@ import { AlertCircle, ArrowLeft, ChevronDown, Info, RefreshCw } from 'lucide-rea
 import type { AppSnapshot, ProviderSummary, ToolId } from '@shared/ipc'
 import { nativeModel, type HeaderInput, type ProviderConfigurations } from '@shared/configuration'
 import { ModelPresetEditor } from './ModelPresetEditor'
-import { createModelPreset } from '@renderer/lib/provider-form'
+import { createHeaderInput, createModelPreset } from '@renderer/lib/provider-form'
 import { ConnectionOptionsEditor } from './ConnectionOptionsEditor'
 import { ConfigPreview } from './ConfigPreview'
 import { ToolIcon } from '@renderer/components/ToolIcon'
@@ -68,16 +68,24 @@ export function ProviderForm({
                 model: nativeModel('claude-code', model)
               }))
             }),
-            headers: config.headers.map((header) => ({
-              id: header.id,
-              name: header.name,
-              value: { mode: 'keep' as const }
-            }))
+            headers: config.headers.length
+              ? config.headers.map((header) => ({
+                  id: header.id,
+                  name: header.name,
+                  value: { mode: 'keep' as const }
+                }))
+              : [createHeaderInput()]
           }
         ])
       )
     const model = createModelPreset()
-    return { [providerToolId]: { models: [model], defaultModelId: model.id, headers: [] } }
+    return {
+      [providerToolId]: {
+        models: [model],
+        defaultModelId: model.id,
+        headers: [createHeaderInput()]
+      }
+    }
   })
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState<string | null>(null)
@@ -93,6 +101,18 @@ export function ProviderForm({
   )
   const [pending, setPending] = useState(false)
   const configuration = configurations[providerToolId]!
+  const configurationInput = Object.fromEntries(
+    Object.entries(configurations).map(([id, config]) => [
+      id,
+      {
+        ...config,
+        headers: config.headers.filter(
+          (header) =>
+            header.name.trim() || header.value.mode === 'keep' || header.value.value.trim()
+        )
+      }
+    ])
+  )
   const modelId =
     configuration.models.find((model) => model.id === currentModelId)?.id ??
     configuration.defaultModelId
@@ -119,14 +139,14 @@ export function ProviderForm({
             baseUrl: form.baseUrl,
             apiKey: form.apiKey ? { mode: 'replace', value: form.apiKey } : { mode: 'keep' },
             tools,
-            configurations
+            configurations: configurationInput
           })
         : await window.api.createProvider({
             name: form.name,
             baseUrl: form.baseUrl,
             apiKey: form.apiKey ?? '',
             tools,
-            configurations
+            configurations: configurationInput
           })
 
       if (!result.ok) {
@@ -290,7 +310,9 @@ export function ProviderForm({
                     <span>
                       高级连接选项
                       <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
-                        自定义请求头与默认模型路由
+                        {providerToolId === 'claude-code'
+                          ? '自定义请求头与默认模型路由'
+                          : '自定义 API 请求头'}
                       </span>
                     </span>
                     <ChevronDown
@@ -336,7 +358,7 @@ export function ProviderForm({
                           ? { mode: 'replace', value: form.apiKey }
                           : { mode: 'keep' },
                         tools: provider.tools,
-                        configurations
+                        configurations: configurationInput
                       }
                     }}
                   />

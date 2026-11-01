@@ -6,6 +6,6 @@
 
 字段写入不代表模型、账号或网关实际可用，不调用付费 API 探测。
 
-Claude 模型仅使用模型名及 `[1m]` 开关；思考强度归共通配置，只写顶层 `effortLevel`，不生成 `modelSettings` 条目。Codex 的主思考强度同样归共通配置，只写顶层 `model_reasoning_effort`；计划模式思考强度和其他模型选项仍由各预设管理。
+Claude 模型仅使用模型名及 `[1m]` 开关；思考强度归共通配置，只写顶层 `effortLevel`，不生成 `modelSettings` 条目。Codex 的主思考强度、1M 与 Fast 均归共通配置：上下文窗口、压缩阈值、service_tier 和 features.fast_mode 直接从共通草稿合并，不由供应商模型覆盖；从本机提取时保留这些字段。旧模型接管记录释放这些共通字段的归属，保留合并后的值；其他已移除的计划思考、摘要与详细程度字段按原规则恢复。自有 provider 表的旧 `supports_websockets` 在重新应用时移除。
 
 ClaudeCodeAdapter 和 CodexAdapter 分别接受本机或 WSL 的工具标识；字段格式与映射共用，路径由服务层解析。共享字段策略、供应商配置和共通模板按基础工具选择，目标文件、接管状态和工具备份使用完整工具标识隔离。模板仅保存于应用目录，应用供应商时才由适配器合并进所选环境的工具文件。

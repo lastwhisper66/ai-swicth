@@ -2,10 +2,7 @@ import { baseToolId } from '@shared/ipc'
 import type { ToolId } from '@shared/ipc'
 import {
   hasControlCharacters,
-  CODEX_EFFORTS,
   claudeBaseModel,
-  REASONING_SUMMARIES,
-  VERBOSITIES,
   ROUTE_KEYS,
   isObject,
   type ProviderConfigurations,
@@ -38,30 +35,32 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): voi
     fail('包含不支持的配置字段，请升级应用或修正输入。')
 }
 
-export function validateModelOptions(value: unknown, toolId: ToolId): ModelOptions {
+export function validateModelOptions(value: unknown, toolId: ToolId, stored = false): ModelOptions {
   if (!isObject(value)) fail('模型选项必须为对象。')
-  exactKeys(
-    value,
-    baseToolId(toolId) === 'codex'
-      ? ['context1m', 'fast', 'planEffort', 'reasoningSummary', 'verbosity']
-      : ['context1m', 'fast', 'autoCompact']
-  )
+  if (baseToolId(toolId) === 'codex') {
+    exactKeys(
+      value,
+      stored
+        ? [
+            'context1m',
+            'autoCompactTokenLimit',
+            'fast',
+            'planEffort',
+            'reasoningSummary',
+            'verbosity'
+          ]
+        : []
+    )
+    // Codex model options from old libraries no longer override shared configuration.
+    return {}
+  }
+  exactKeys(value, ['context1m', 'fast', 'autoCompact'])
   if (value.context1m !== undefined && value.context1m !== true)
     fail('1M 仅支持请求 1M 或恢复默认。')
   for (const key of ['fast', 'autoCompact']) {
     if (value[key] !== undefined && typeof value[key] !== 'boolean') fail('模型开关必须为布尔值。')
   }
-  if (value.planEffort !== undefined && !CODEX_EFFORTS.includes(value.planEffort as never))
-    fail('计划模式思考强度无效。')
-  if (
-    value.reasoningSummary !== undefined &&
-    !REASONING_SUMMARIES.includes(value.reasoningSummary as never)
-  )
-    fail('思考摘要模式无效。')
-  if (value.verbosity !== undefined && !VERBOSITIES.includes(value.verbosity as never))
-    fail('回复详细程度无效。')
-  if (baseToolId(toolId) === 'claude-code') return value.context1m ? { context1m: true } : {}
-  return structuredClone(value) as ModelOptions
+  return value.context1m ? { context1m: true } : {}
 }
 
 export function validateConfigurations<T extends ToolId>(
@@ -79,7 +78,7 @@ export function validateConfigurations<T extends ToolId>(
     exactKeys(
       config,
       baseToolId(toolId) === 'codex'
-        ? ['models', 'defaultModelId', 'headers', 'supportsWebsockets']
+        ? ['models', 'defaultModelId', 'headers', ...(stored ? ['supportsWebsockets'] : [])]
         : ['models', 'defaultModelId', 'headers', 'routes']
     )
     if (!Array.isArray(config.models) || config.models.length < 1 || config.models.length > 100)
@@ -90,7 +89,7 @@ export function validateConfigurations<T extends ToolId>(
       exactKeys(model, stored ? ['id', 'name', 'model', 'options'] : ['id', 'model', 'options'])
       const isClaude = baseToolId(toolId) === 'claude-code'
       const apiModel = text(model.model, isClaude ? 204 : 200, 'API 模型 ID')
-      const options = validateModelOptions(model.options, toolId)
+      const options = validateModelOptions(model.options, toolId, stored)
       const modelId = isClaude ? claudeBaseModel(apiModel) : apiModel
       if (!modelId.trim()) fail('请填写模型名后再启用 1M 上下文。')
       if (modelId.length > 200) fail('模型名不能超过 200 个字符。')
@@ -158,10 +157,6 @@ export function validateConfigurations<T extends ToolId>(
     })
     const next = { models, defaultModelId, headers }
     result[toolId] = next
-    if (baseToolId(toolId) === 'codex' && config.supportsWebsockets !== undefined) {
-      if (typeof config.supportsWebsockets !== 'boolean') fail('WebSocket 兼容能力必须为布尔值。')
-      result[toolId]!.supportsWebsockets = config.supportsWebsockets
-    }
     if (baseToolId(toolId) === 'claude-code' && config.routes !== undefined) {
       if (!isObject(config.routes)) fail('模型路由格式无效。')
       exactKeys(config.routes, ROUTE_KEYS)

@@ -3,13 +3,8 @@ import { createModelPreset } from '@renderer/lib/provider-form'
 import { Plus, Star, Trash2 } from 'lucide-react'
 import type { ToolId } from '@shared/ipc'
 import {
-  codexEfforts,
-  REASONING_SUMMARIES,
-  VERBOSITIES,
-  DEFAULT_CHOICES,
   claudeBaseModel,
   type HeaderInput,
-  type ModelOptions,
   type ModelPreset,
   type ProviderToolConfiguration
 } from '@shared/configuration'
@@ -17,8 +12,7 @@ import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
 import { Field, FieldDescription, FieldLabel } from '@renderer/components/ui/field'
 import { Badge } from '@renderer/components/ui/badge'
-import { ConfigurationSelect } from './ConfigurationSelect'
-import { ConfigurationCheckbox } from './ConfigurationCheckbox'
+import { ConfigurationSwitch } from './ConfigurationSwitch'
 
 export function ModelPresetEditor({
   toolId,
@@ -37,17 +31,10 @@ export function ModelPresetEditor({
         model.id === id ? { ...model, ...changes } : model
       )
     })
-  const option = (preset: ModelPreset, key: keyof ModelOptions, value: string): void => {
-    const options = { ...preset.options }
-    if (value === 'default') delete options[key]
-    else
-      Object.assign(options, { [key]: value === 'true' ? true : value === 'false' ? false : value })
-    changeModel(preset.id, { options })
-  }
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="font-semibold">模型列表与选项</h3>
+        <h3 className="font-semibold">{isClaude ? '模型列表与选项' : '模型列表'}</h3>
         <Button
           type="button"
           variant="outline"
@@ -62,11 +49,10 @@ export function ModelPresetEditor({
       </div>
       <p className="text-xs leading-6 text-muted-foreground">
         {isClaude
-          ? '直接填写 API 模型 ID，勾选 1M 上下文即可添加 [1m] 后缀。思考强度在共通配置中统一设置。'
-          : '填写供应商提供的 API 模型 ID，同一 ID 可保存不同选项的预设。1M、Fast 及思考级别的实际可用性由模型和网关决定。'}
+          ? '直接填写 API 模型 ID，开启 1M 上下文即可添加 [1m] 后缀。思考强度在共通配置中统一设置。'
+          : '填写供应商提供的 API 模型 ID。1M 长上下文与 Fast Mode 在 Codex 共通配置中统一设置。'}
       </p>
       {configuration.models.map((preset, index) => {
-        const efforts = codexEfforts(preset.model)
         return (
           <div key={preset.id} className="space-y-4 rounded-lg border p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -128,75 +114,25 @@ export function ModelPresetEditor({
                     changeModel(preset.id, { model: value, options })
                   }}
                   spellCheck={false}
-                  placeholder={isClaude ? 'claude-sonnet-4-6' : 'gpt-5.4'}
                 />
               </Field>
-              {isClaude ? (
-                <ConfigurationCheckbox
+              {isClaude && (
+                <ConfigurationSwitch
                   id={`${preset.id}-context1m`}
                   label="启用 1M 上下文"
-                  hint="勾选在模型名末尾添加 [1m]，取消时移除；实际支持由模型和网关决定。"
+                  hint="开启时在模型名末尾添加 [1m]，关闭时移除；实际支持由模型和网关决定。"
                   checked={Boolean(preset.options.context1m)}
                   onCheckedChange={(checked) => {
                     const options = { ...preset.options }
-                    if (checked === true) options.context1m = true
+                    if (checked) options.context1m = true
                     else delete options.context1m
                     const base = claudeBaseModel(preset.model)
                     changeModel(preset.id, {
-                      model: checked === true ? `${base}[1m]` : base,
+                      model: checked ? `${base}[1m]` : base,
                       options
                     })
                   }}
                 />
-              ) : (
-                <>
-                  <ConfigurationSelect
-                    label="1M 长上下文"
-                    value={preset.options.context1m ? 'true' : 'default'}
-                    choices={[
-                      ['default', '恢复工具默认'],
-                      ['true', '请求 1M']
-                    ]}
-                    onChange={(value) => option(preset, 'context1m', value)}
-                    hint="请求固定 1,000,000 tokens；不设置自动压缩阈值。"
-                  />
-                  <ConfigurationSelect
-                    label="Fast mode"
-                    value={
-                      preset.options.fast === undefined ? 'default' : String(preset.options.fast)
-                    }
-                    choices={DEFAULT_CHOICES}
-                    onChange={(value) => option(preset, 'fast', value)}
-                    hint="使用 service_tier = fast，并同步 features.fast_mode。"
-                  />
-                  <ConfigurationSelect
-                    label="计划模式思考强度"
-                    value={preset.options.planEffort ?? 'default'}
-                    choices={[
-                      ['default', '工具默认'],
-                      ...efforts.map((value) => [value, value] as const)
-                    ]}
-                    onChange={(value) => option(preset, 'planEffort', value)}
-                  />
-                  <ConfigurationSelect
-                    label="思考摘要"
-                    value={preset.options.reasoningSummary ?? 'default'}
-                    choices={[
-                      ['default', '工具默认'],
-                      ...REASONING_SUMMARIES.map((value) => [value, value] as const)
-                    ]}
-                    onChange={(value) => option(preset, 'reasoningSummary', value)}
-                  />
-                  <ConfigurationSelect
-                    label="回复详细程度"
-                    value={preset.options.verbosity ?? 'default'}
-                    choices={[
-                      ['default', '工具默认'],
-                      ...VERBOSITIES.map((value) => [value, value] as const)
-                    ]}
-                    onChange={(value) => option(preset, 'verbosity', value)}
-                  />
-                </>
               )}
             </div>
           </div>
@@ -204,8 +140,8 @@ export function ModelPresetEditor({
       })}
       <FieldDescription>
         {isClaude
-          ? '保存模型不会立即修改工具文件；返回首页点击“应用”后生效。取消 1M 勾选仅移除后缀，模型原生上下文容量由工具决定。'
-          : '未设置的选项恢复接管前的值；原本没有设置时清除本应用生成的覆盖。保存此列表不会立即修改工具文件。'}
+          ? '保存模型不会立即修改工具文件；返回首页点击“应用”后生效。关闭 1M 仅移除后缀，模型原生上下文容量由工具决定。'
+          : '1M 长上下文与 Fast Mode 由共通配置统一管理，切换供应商或模型后继续沿用。保存模型列表不会立即修改工具文件。'}
       </FieldDescription>
     </section>
   )
