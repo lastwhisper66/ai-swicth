@@ -8,6 +8,7 @@ import {
 } from '@shared/applications'
 import { Button } from '@renderer/components/ui/button'
 import { Spinner } from '@renderer/components/ui/spinner'
+import { getApplicationInstallationSource } from '@renderer/lib/application-installation'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@renderer/components/ui/tabs'
 import {
   Dialog,
@@ -162,18 +163,18 @@ function InstallationDetails({
   application: ManagedApplication
 }): React.JSX.Element {
   const definition = getApplicationDefinition(application.applicationId)
+  const source = getApplicationInstallationSource(application)
   const fields = [
     ['安装版本', application.installation.version ?? '未检测到'],
     ['npm 最新版', application.latestVersion ?? '未确认'],
     ['启动文件', application.installation.executablePath ?? '未检测到'],
-    [
-      '安装来源',
-      application.npm.managed
-        ? 'npm 全局安装'
-        : application.installation.state === 'installed' && application.npm.available
-          ? '其他安装方式'
-          : '未确认'
-    ],
+    ['安装来源', source.label],
+    ...(application.installationSource
+      ? [
+          ['判断依据', application.installationSource.evidence],
+          ['卸载方式', application.installationSource.uninstallHint]
+        ]
+      : []),
     ['Node.js', application.npm.nodeVersion ?? '未检测到'],
     ['npm', application.npm.npmVersion ?? '未检测到'],
     ['全局目录', application.npm.prefix ?? '未检测到'],
@@ -190,7 +191,8 @@ function InstallationDetails({
     <>
       <div className="space-y-1 rounded-lg bg-muted/40 p-3 text-xs leading-5">
         <p>{application.installation.message}</p>
-        <p>{application.npm.message}</p>
+        <p>{source.managementNotice ?? application.npm.message}</p>
+        {source.managementNotice && !application.npm.available && <p>{application.npm.message}</p>}
         {application.latestVersionError && (
           <p className="text-destructive">{application.latestVersionError}</p>
         )}

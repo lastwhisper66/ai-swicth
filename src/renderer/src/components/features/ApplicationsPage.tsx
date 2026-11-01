@@ -16,7 +16,8 @@ import {
   type ApplicationId
 } from '@shared/applications'
 import { ApplicationIcon } from '@renderer/components/ApplicationIcon'
-import { useApplications } from '@renderer/hooks/use-applications'
+import type { ApplicationListState } from '@renderer/hooks/use-applications'
+import { getApplicationInstallationSource } from '@renderer/lib/application-installation'
 import { ApplicationDetailsDialog } from './ApplicationDetailsDialog'
 import { SortableApplicationTable } from './SortableApplicationTable'
 import { Button } from '@renderer/components/ui/button'
@@ -51,13 +52,13 @@ import {
 } from '@renderer/components/ui/alert-dialog'
 
 interface ApplicationsPageProps {
+  list: ApplicationListState
   preferences: ApplicationPreferences
   preferencesReady: boolean
   tasks: ApplicationTask[]
   onVisibilityChange: (toolId: ToolId, visible: boolean) => Promise<boolean>
   onOrderChange: (order: ApplicationId[]) => Promise<boolean>
   onTaskStarted: (task: ApplicationTask) => void
-  onEnvironmentChanged: () => void
 }
 
 const actionNames: Record<ApplicationAction, string> = {
@@ -68,15 +69,15 @@ const actionNames: Record<ApplicationAction, string> = {
 }
 
 export function ApplicationsPage({
+  list,
   preferences,
   preferencesReady,
   tasks,
   onVisibilityChange,
   onOrderChange,
-  onTaskStarted,
-  onEnvironmentChanged
+  onTaskStarted
 }: ApplicationsPageProps): React.JSX.Element {
-  const { applications, refreshing, error, refresh } = useApplications(tasks)
+  const { applications, refreshing, error, refresh, checkedAt, setLaunch } = list
   const [pending, setPending] = useState<ApplicationId | null>(null)
   const [pendingChecks, setPendingChecks] = useState(new Set<ApplicationId>())
   const [detailsTarget, setDetailsTarget] = useState<ApplicationId | null>(null)
@@ -117,9 +118,8 @@ export function ApplicationsPage({
         toast.error(response.error.message)
         return
       }
-      toast.success('shell 已保存，同一发行版的应用共用此设置。')
-      onEnvironmentChanged()
-      void refresh(false, true)
+      setLaunch(input.applicationId, input.shell)
+      toast.success('shell 已保存，同一发行版的应用共用此设置。请点击“重新检测”更新状态。')
     } catch {
       toast.error('无法保存 WSL 设置，请重新打开应用后重试。')
     } finally {
@@ -216,6 +216,7 @@ export function ApplicationsPage({
           (task?.state === 'running' && task.action === 'check-update')
         }
         relatedRunning={mutationRunning}
+        launchDisabled={refreshing}
         onVisibilityChange={(visible) => {
           if (configurationToolId) void toggleVisibility(configurationToolId, visible)
         }}
@@ -234,15 +235,38 @@ export function ApplicationsPage({
           <h1 className="text-lg font-semibold tracking-tight">AI 应用</h1>
           <p className="text-xs text-muted-foreground">管理 CLI 安装与版本</p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={refreshing}
-          onClick={() => void refresh(true)}
-        >
-          <RefreshCw />
-          重新检测
-        </Button>
+        <div className="flex items-center gap-3">
+          {checkedAt && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <time dateTime={checkedAt} tabIndex={0} className="text-xs text-muted-foreground">
+                  上次检查：
+                  {new Date(checkedAt).toLocaleTimeString('zh-CN', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false
+                  })}
+                </time>
+              </TooltipTrigger>
+              <TooltipContent>
+                {new Date(checkedAt).toLocaleString('zh-CN', {
+                  dateStyle: 'long',
+                  timeStyle: 'medium',
+                  hour12: false
+                })}
+              </TooltipContent>
+            </Tooltip>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={refreshing}
+            onClick={() => void refresh(true)}
+          >
+            <RefreshCw />
+            重新检测
+          </Button>
+        </div>
       </div>
       {error && (
         <Alert variant="destructive">
@@ -266,7 +290,8 @@ export function ApplicationsPage({
         }}
       />
       <p className="text-xs leading-5 text-muted-foreground">
-        WSL 使用已配置或默认发行版；显示开关控制供应商页面在侧栏的显示。
+        仅支持管理已确认来源的 npm 全局安装；其他方式安装的 CLI 请自行更新或卸载。 WSL
+        使用已配置或默认发行版；显示开关控制供应商页面在侧栏的显示。
       </p>
       {detailsTarget && (
         <ApplicationDetailsDialog
@@ -415,6 +440,7 @@ function ApplicationRow({
   checking,
   visibilityDisabled,
   relatedRunning,
+  launchDisabled,
   onVisibilityChange,
   onAction,
   onLaunchChange,
@@ -431,6 +457,7 @@ function ApplicationRow({
   checking: boolean
   visibilityDisabled: boolean
   relatedRunning: boolean
+  launchDisabled: boolean
   onVisibilityChange: (visible: boolean) => void
   onAction: (action: ApplicationAction) => void
   onLaunchChange: (input: SetWslLaunchSettingsInput) => void
@@ -439,6 +466,7 @@ function ApplicationRow({
 }): React.JSX.Element {
   const installed = application.installation.state === 'installed'
   const missing = application.installation.state === 'not-detected'
+  const source = getApplicationInstallationSource(application)
   const warning =
     application.environmentError ??
     (application.installation.state === 'unavailable'
@@ -479,6 +507,14 @@ function ApplicationRow({
                   </span>
                 </Badge>
               </div>
+              {installed && (
+                <p
+                  className="truncate text-[10px] text-muted-foreground"
+                  title={source.managementNotice ?? undefined}
+                >
+                  {source.label}
+                </p>
+              )}
               <p
                 className="truncate text-[11px] text-muted-foreground"
                 title={application.installation.executablePath ?? undefined}
@@ -501,7 +537,7 @@ function ApplicationRow({
                 ['zsh', 'zsh'],
                 ['fish', 'fish']
               ]}
-              disabled={disabled || !application.distribution}
+              disabled={disabled || launchDisabled || !application.distribution}
               onChange={(shell) =>
                 onLaunchChange({
                   applicationId: application.applicationId,
@@ -594,7 +630,7 @@ function ApplicationRow({
                 title={
                   application.npm.managed
                     ? `更新至 ${application.latestVersion}`
-                    : application.npm.message
+                    : (source.managementNotice ?? application.npm.message)
                 }
                 onClick={() => onAction('update')}
               >
@@ -614,15 +650,31 @@ function ApplicationRow({
                   <MoreHorizontal />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-44">
+              <DropdownMenuContent
+                align="end"
+                className="min-w-44"
+                aria-describedby={
+                  source.managementNotice
+                    ? `uninstall-help-${application.applicationId}`
+                    : undefined
+                }
+              >
                 <DropdownMenuItem
                   variant="destructive"
                   disabled={disabled || !application.npm.managed || !!application.environmentError}
                   onSelect={onUninstall}
                 >
                   <Trash2 />
-                  卸载
+                  {application.npm.managed ? '卸载' : '无法卸载'}
                 </DropdownMenuItem>
+                {source.managementNotice && (
+                  <p
+                    id={`uninstall-help-${application.applicationId}`}
+                    className="max-w-64 px-2 py-1.5 text-xs leading-5 text-muted-foreground"
+                  >
+                    {source.managementNotice}
+                  </p>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>

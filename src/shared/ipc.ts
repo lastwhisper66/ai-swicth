@@ -102,6 +102,7 @@ export interface NpmInstallation {
 export interface ManagedApplication {
   applicationId: ApplicationId
   installation: ToolInstallation
+  installationSource: ApplicationInstallationSource | null
   npm: NpmInstallation
   distribution: string | null
   distributionLabel: string | null
@@ -116,6 +117,18 @@ export interface ManagedApplication {
 
 export interface DetectApplicationsInput {
   requestId: string
+  refresh?: boolean
+}
+
+export interface ApplicationListSnapshot {
+  applications: ManagedApplication[]
+  checkedAt: string
+}
+
+export interface ApplicationInstallationSource {
+  label: string
+  evidence: string
+  uninstallHint: string
 }
 
 export interface ApplicationDetectionResult {
@@ -475,7 +488,7 @@ export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: ApiError
 export interface DesktopApi {
   getBootstrap: () => Promise<ApiResult<AppBootstrap>>
   getToolStatus: (input: { toolId: ToolId }) => Promise<ApiResult<ToolStatus>>
-  getApplications: (input: DetectApplicationsInput) => Promise<ApiResult<ManagedApplication[]>>
+  getApplications: (input: DetectApplicationsInput) => Promise<ApiResult<ApplicationListSnapshot>>
   onApplicationDetected: (listener: (result: ApplicationDetectionResult) => void) => () => void
   getApplicationTasks: () => Promise<ApiResult<ApplicationTask[]>>
   setApplicationVisibility: (

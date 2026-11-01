@@ -7,7 +7,12 @@ export interface ApplicationListState {
   applications: ManagedApplication[]
   refreshing: boolean
   error: string | null
-  refresh: (feedback?: boolean, invalidate?: boolean) => Promise<void>
+  checkedAt: string | null
+  refresh: (feedback?: boolean) => Promise<void>
+  setLaunch: (
+    applicationId: ApplicationId,
+    shell: ManagedApplication['launchSettings']['shell']
+  ) => void
 }
 
 interface DetectionRequest {
@@ -17,13 +22,15 @@ interface DetectionRequest {
   unsubscribe: () => void
 }
 
-/** Each page visit starts a fresh detection; dynamic fields stay blank until confirmed. */
-export function useApplications(tasks: ApplicationTask[]): ApplicationListState {
+/** App-owned state survives page navigation; the main process also caches until exit. */
+export function useApplications(tasks: ApplicationTask[], enabled: boolean): ApplicationListState {
   const [state, setState] = useState<{
     applications: ManagedApplication[]
     refreshing: boolean
     error: string | null
-  }>({ applications: [], refreshing: true, error: null })
+    checkedAt: string | null
+  }>({ applications: [], refreshing: false, error: null, checkedAt: null })
+  const initialized = useRef(false)
   const pending = useRef<DetectionRequest | null>(null)
   const mounted = useRef(false)
   const handledTasks = useRef(
@@ -41,25 +48,28 @@ export function useApplications(tasks: ApplicationTask[]): ApplicationListState 
     }
   }, [])
 
-  const refresh = useCallback((feedback = false, invalidate = false): Promise<void> => {
-    if (pending.current && !invalidate) {
+  const refresh = useCallback((feedback = false): Promise<void> => {
+    if (pending.current) {
       pending.current.feedback ||= feedback
       return pending.current.promise
     }
     const request: DetectionRequest = {
       id: crypto.randomUUID(),
-      feedback: feedback || (pending.current?.feedback ?? false),
+      feedback,
       promise: Promise.resolve(),
       unsubscribe: () => {}
     }
-    pending.current?.unsubscribe()
     pending.current = request
-    setState({ applications: [], refreshing: true, error: null })
+    setState((current) => ({ ...current, refreshing: true, error: null }))
     const initialResultRevision = resultRevision.current
+    const startedAt = new Date().toISOString()
     const isCurrent = (): boolean => mounted.current && pending.current === request
     const mergeTaskResult = (application: ManagedApplication): ManagedApplication => {
       const result = taskResults.current.get(application.applicationId)
-      return result && result.revision > initialResultRevision
+      return result &&
+        result.revision > initialResultRevision &&
+        result.task.finishedAt !== null &&
+        result.task.finishedAt >= startedAt
         ? applyTaskResult(application, result.task)
         : application
     }
@@ -77,7 +87,10 @@ export function useApplications(tasks: ApplicationTask[]): ApplicationListState 
             applications: replaceApplication(current.applications, application)
           }))
         })
-        const response = await window.api.getApplications({ requestId: request.id })
+        const response = await window.api.getApplications({
+          requestId: request.id,
+          refresh: feedback
+        })
         if (!isCurrent()) return
         if (!response.ok) {
           setState((current) => ({ ...current, error: response.error.message }))
@@ -85,8 +98,13 @@ export function useApplications(tasks: ApplicationTask[]): ApplicationListState 
           return
         }
         // Reconcile the final response without replacing newer installation task results.
-        const applications = response.value.map(mergeTaskResult)
-        setState((current) => ({ ...current, applications, error: null }))
+        const applications = response.value.applications.map(mergeTaskResult)
+        setState((current) => ({
+          ...current,
+          applications,
+          error: null,
+          checkedAt: response.value.checkedAt
+        }))
         if (request.feedback) {
           const problems = applications.filter(
             (application) =>
@@ -118,8 +136,41 @@ export function useApplications(tasks: ApplicationTask[]): ApplicationListState 
   }, [])
 
   useEffect(() => {
-    void refresh()
-  }, [refresh])
+    if (!enabled || initialized.current) return
+    // Deferring dispatch prevents StrictMode's first effect from consuming initialization.
+    let active = true
+    void Promise.resolve().then(() => {
+      if (!active || initialized.current) return
+      initialized.current = true
+      void refresh()
+    })
+    return () => {
+      active = false
+    }
+  }, [enabled, refresh])
+
+  const setLaunch = useCallback(
+    (applicationId: ApplicationId, shell: ManagedApplication['launchSettings']['shell']): void => {
+      setState((current) => {
+        const distribution = current.applications.find(
+          (item) => item.applicationId === applicationId
+        )?.distribution
+        return {
+          ...current,
+          applications: current.applications.map((item) =>
+            distribution && item.distribution === distribution
+              ? {
+                  ...item,
+                  launchSettings: { shell },
+                  environmentError: 'shell 已更改，当前为上次检测结果。请点击“重新检测”后操作。'
+                }
+              : item
+          )
+        }
+      })
+    },
+    []
+  )
 
   useEffect(() => {
     const finished = tasks.filter(
@@ -137,6 +188,10 @@ export function useApplications(tasks: ApplicationTask[]): ApplicationListState 
     setState((current) => ({
       ...current,
       applications: finished.reduce((applications, task) => {
+        // A reopened renderer may receive task history after a newer cached list.
+        if (current.checkedAt && task.finishedAt && task.finishedAt <= current.checkedAt) {
+          return applications
+        }
         const previous = applications.find((item) => item.applicationId === task.applicationId)
         const result = previous
           ? applyTaskResult(previous, task)
@@ -152,7 +207,9 @@ export function useApplications(tasks: ApplicationTask[]): ApplicationListState 
     applications: state.applications,
     refreshing: state.refreshing,
     error: state.error,
-    refresh
+    checkedAt: state.checkedAt,
+    refresh,
+    setLaunch
   }
 }
 
@@ -174,6 +231,7 @@ function applyTaskResult(
     const message = '安装结果尚未确认，请完整退出并重新打开应用后重新检测。'
     return {
       ...application,
+      installationSource: null,
       installation: {
         state: 'unavailable',
         version: null,

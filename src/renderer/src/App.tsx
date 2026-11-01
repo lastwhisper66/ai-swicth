@@ -26,6 +26,7 @@ import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import { Button } from '@renderer/components/ui/button'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { useAppBootstrap } from '@renderer/hooks/use-app-bootstrap'
+import { useApplications } from '@renderer/hooks/use-applications'
 
 type ProviderEditorState = { provider: ProviderSummary | null; toolId: ToolId } | null
 type MainView = ToolId | 'settings' | 'applications'
@@ -51,6 +52,7 @@ function App(): React.JSX.Element {
   const [providerEditor, setProviderEditor] = useState<ProviderEditorState>(null)
   const [settingsTool, setSettingsTool] = useState<ToolId>('claude-code')
   const [view, setView] = useState<MainView>('claude-code')
+  const applicationList = useApplications(applicationTasks, view === 'applications')
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
   const [pendingKey, setPendingKey] = useState<string | null>(null)
 
@@ -177,15 +179,6 @@ function App(): React.JSX.Element {
     }
   }
 
-  function refreshApplicationEnvironment(): void {
-    void window.api
-      .getSnapshot()
-      .then((response) => {
-        if (response.ok) adoptSnapshot(response.value)
-      })
-      .catch(() => {})
-  }
-
   function adoptSnapshot(nextSnapshot: AppSnapshot): void {
     startTransition(() => {
       replaceSnapshot(nextSnapshot)
@@ -209,20 +202,6 @@ function App(): React.JSX.Element {
           ? 'applications'
           : current
       )
-  }
-
-  async function refreshSnapshot(): Promise<void> {
-    setPendingKey('refresh')
-    try {
-      const result = await window.api.getSnapshot()
-      if (!result.ok) return showError(result.error.message)
-      adoptSnapshot(result.value)
-      showSuccess('工具状态已刷新。')
-    } catch {
-      showError('无法刷新本地状态，请重新打开应用后重试。')
-    } finally {
-      setPendingKey(null)
-    }
   }
 
   async function deleteProvider(providerId: string): Promise<void> {
@@ -435,11 +414,7 @@ function App(): React.JSX.Element {
   return (
     <TooltipProvider>
       <div className="flex h-svh min-w-0 flex-col overflow-hidden">
-        <TitleBar
-          busy={pendingKey !== null}
-          refreshing={pendingKey === 'refresh'}
-          onRefresh={snapshot ? () => void refreshSnapshot() : () => void retryConnection()}
-        />
+        <TitleBar />
         <div className="flex min-h-0 flex-1">
           <AppSidebar
             view={view}
@@ -464,6 +439,7 @@ function App(): React.JSX.Element {
               )}
               {view === 'applications' ? (
                 <ApplicationsPage
+                  list={applicationList}
                   preferences={snapshot?.applicationPreferences ?? initialPreferences}
                   preferencesReady={!!snapshot}
                   tasks={applicationTasks}
@@ -475,7 +451,6 @@ function App(): React.JSX.Element {
                       return current ? previous : [...previous, task].slice(-30)
                     })
                   }
-                  onEnvironmentChanged={refreshApplicationEnvironment}
                 />
               ) : view === 'settings' && snapshot ? (
                 <SettingsPage

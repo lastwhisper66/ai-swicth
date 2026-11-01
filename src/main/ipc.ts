@@ -72,7 +72,7 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
           const result: ApplicationDetectionResult = { requestId: input.requestId, application }
           event.sender.send(APPLICATION_DETECTED, result)
         }
-      })
+      }, input.refresh)
   )
   registerBusinessHandler(
     IPC_CHANNELS.getApplicationTasks,
@@ -353,7 +353,10 @@ function parseApplicationVisibility(args: unknown[]): SetApplicationVisibilityIn
 
 function parseApplicationDetection(args: unknown[]): DetectApplicationsInput {
   const input = expectRecordArgument(args)
-  return { requestId: expectIdentifier(input.requestId) }
+  return {
+    requestId: expectIdentifier(input.requestId),
+    refresh: input.refresh === undefined ? false : expectBoolean(input.refresh)
+  }
 }
 
 function parseToolInput(args: unknown[]): { toolId: ToolId } {

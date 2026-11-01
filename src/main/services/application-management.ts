@@ -5,6 +5,7 @@ import { isAbsolute, posix, win32 } from 'node:path'
 import { net } from 'electron'
 import type {
   ApplicationTask,
+  ApplicationListSnapshot,
   ManagedApplication,
   NpmInstallation,
   SetWslLaunchSettingsInput,
@@ -32,6 +33,8 @@ import type { ToolInstallationService } from './tool-installation'
 import type { PathSettingsStore } from './path-settings'
 import type { WslIdentity, WslRuntime } from './wsl-runtime'
 import { compareApplicationVersions } from './application-version'
+import { identifyInstallationSource } from './application-source'
+import { doctorArguments, parseDoctorInstallMethod } from './tool-diagnostics'
 
 interface ApplicationContext {
   applicationId: ApplicationId
@@ -44,6 +47,12 @@ interface NpmContext {
   info: NpmInstallation
   executablePath: string | null
   packagePath: string | null
+}
+
+interface ListRequest {
+  listeners: Set<(application: ManagedApplication) => void>
+  rows: Map<ApplicationId, ManagedApplication>
+  promise: Promise<ApplicationListSnapshot>
 }
 
 const unavailableNpm = (message: string): NpmInstallation => ({
@@ -62,6 +71,13 @@ export class ApplicationManagementService {
   private locks = new Set<string>()
   private checks = new Map<string, Set<ApplicationId>>()
   private latestQueries = new Map<ApplicationKind, Promise<string>>()
+  private cachedList: ApplicationListSnapshot | null = null
+  private pendingList: ListRequest | null = null
+  private resultRevision = 0
+  private taskResults = new Map<
+    ApplicationId,
+    { revision: number; application: ManagedApplication }
+  >()
 
   constructor(
     readonly preferences: ApplicationPreferencesStore,
@@ -79,7 +95,34 @@ export class ApplicationManagementService {
     return this.locks.size > 0 || this.checks.size > 0
   }
 
-  async list(detected: (application: ManagedApplication) => void): Promise<ManagedApplication[]> {
+  async list(
+    detected: (application: ManagedApplication) => void,
+    refresh = false
+  ): Promise<ApplicationListSnapshot> {
+    if (!this.pendingList && !refresh && this.cachedList) return this.cachedList
+    if (!this.pendingList) {
+      const request: ListRequest = {
+        listeners: new Set(),
+        rows: new Map(),
+        promise: Promise.resolve({ applications: [], checkedAt: '' })
+      }
+      this.pendingList = request
+      request.promise = this.detectAll(request).finally(() => {
+        this.pendingList = null
+      })
+    }
+    const request = this.pendingList
+    request.listeners.add(detected)
+    for (const application of request.rows.values()) detected(application)
+    try {
+      return await request.promise
+    } finally {
+      request.listeners.delete(detected)
+    }
+  }
+
+  private async detectAll(request: ListRequest): Promise<ApplicationListSnapshot> {
+    const initialRevision = this.resultRevision
     this.paths.refresh()
     this.installations.clear()
     const releases = new Map(
@@ -91,20 +134,40 @@ export class ApplicationManagementService {
         )
       ])
     )
-    return Promise.all(
+    const applications = await Promise.all(
       APPLICATION_IDS.map(async (applicationId) => {
         const [application, release] = await Promise.all([
           this.inspect(applicationId),
           releases.get(APPLICATION_INSTANCES[applicationId].kind)!
         ])
-        const result = withLatestVersion(application, release.version, release.error)
-        detected(result)
+        const taskResult = this.taskResults.get(applicationId)
+        const result =
+          taskResult && taskResult.revision > initialRevision
+            ? taskResult.application
+            : withLatestVersion(application, release.version, release.error)
+        request.rows.set(applicationId, result)
+        for (const listener of request.listeners) listener(result)
         return result
       })
     )
+    this.cachedList = {
+      applications: applications.map((application) => {
+        const taskResult = this.taskResults.get(application.applicationId)
+        return taskResult && taskResult.revision > initialRevision
+          ? taskResult.application
+          : application
+      }),
+      checkedAt: new Date().toISOString()
+    }
+    return this.cachedList
   }
 
   async setLaunch(input: SetWslLaunchSettingsInput): Promise<void> {
+    if (this.pendingList)
+      throw new AppError(
+        'CONCURRENT_MODIFICATION',
+        '正在重新检测应用，请等待检测完成后再修改 shell。'
+      )
     if (!isWslApplication(input.applicationId))
       throw new AppError('INVALID_INPUT', '本机应用不使用 WSL shell 设置。')
     const context = await this.context(input.applicationId)
@@ -113,6 +176,20 @@ export class ApplicationManagementService {
     this.preferences.setLaunch(context.identity!.distribution, {
       shell: input.shell
     })
+    if (this.cachedList) {
+      this.cachedList = {
+        ...this.cachedList,
+        applications: this.cachedList.applications.map((application) =>
+          application.distribution === context.identity!.distribution
+            ? {
+                ...application,
+                launchSettings: { shell: input.shell },
+                environmentError: 'shell 已更改，当前为上次检测结果。请点击“重新检测”后操作。'
+              }
+            : application
+        )
+      }
+    }
     this.paths.refresh()
     this.installations.clear()
   }
@@ -176,6 +253,7 @@ export class ApplicationManagementService {
   ): Promise<ManagedApplication> {
     const result: ManagedApplication = {
       applicationId,
+      installationSource: null,
       installation: {
         state: 'unavailable',
         version: null,
@@ -222,6 +300,52 @@ export class ApplicationManagementService {
             : '当前 CLI 由其他方式安装，请通过原安装方式更新或卸载。'
       }
       result.npm = npm.info
+      if (installation.state === 'installed' && installation.executablePath) {
+        const executable = installation.executablePath
+        let resolvedPath = executable
+        try {
+          if (context.identity) {
+            const resolved = await this.command(context, 'readlink', ['-f', executable])
+            const path = resolved.stdout.trim()
+            if (resolved.exitCode === 0 && posix.isAbsolute(path) && !hasControlCharacters(path))
+              resolvedPath = path
+          } else {
+            resolvedPath = await realpath(executable)
+          }
+        } catch {
+          /* Source detection is best effort; it never changes installation status. */
+        }
+        let source = identifyInstallationSource(applicationId, npm.info, executable, resolvedPath)
+        const toolId = APPLICATION_INSTANCES[applicationId].configurationToolId
+        if (!npm.info.managed && !source && toolId) {
+          try {
+            const report = await this.command(
+              context,
+              getApplicationDefinition(applicationId).command,
+              doctorArguments(toolId),
+              5000,
+              false,
+              executable
+            )
+            const method = parseDoctorInstallMethod(toolId, report.stdout)
+            source = identifyInstallationSource(
+              applicationId,
+              npm.info,
+              executable,
+              resolvedPath,
+              method
+            )
+          } catch {
+            /* Unsupported or interactive doctor commands fall back to path information. */
+          }
+        }
+        result.installationSource = source ?? {
+          label: '来源未确认',
+          evidence: `启动文件：${executable}；实际文件：${resolvedPath}。未获取到可识别的安装渠道，请核对路径和安装记录。`,
+          uninstallHint:
+            '无法确定原安装渠道，请核对上述路径及终端安装记录，并通过原安装器或包管理器自行卸载。'
+        }
+      }
     } catch (error) {
       result.environmentError = toApiError(error).message
       result.installation.message = result.environmentError
@@ -584,6 +708,29 @@ export class ApplicationManagementService {
   private report(task: ApplicationTask, message: string): void {
     if (task.state === 'running') task.message = message
     task.log = [...task.log.slice(-39), message]
+    if (task.state !== 'running') {
+      const previous = this.cachedList?.applications.find(
+        (application) => application.applicationId === task.applicationId
+      )
+      const result =
+        task.result ??
+        (previous && task.action === 'check-update' && task.state === 'failed'
+          ? withLatestVersion(previous, null, task.message)
+          : null)
+      if (result) {
+        this.taskResults.set(task.applicationId, {
+          revision: ++this.resultRevision,
+          application: result
+        })
+        if (this.cachedList)
+          this.cachedList = {
+            ...this.cachedList,
+            applications: this.cachedList.applications.map((application) =>
+              application.applicationId === task.applicationId ? result : application
+            )
+          }
+      }
+    }
     // Only our own progress messages leave the main process. Raw npm output may contain tokens.
     this.changed({ ...task, log: [...task.log] })
   }
