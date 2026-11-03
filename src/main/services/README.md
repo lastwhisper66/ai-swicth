@@ -26,7 +26,7 @@
 
 `common-config.ts` 将本机与 WSL 映射到同一条基础工具模板记录，显式空内容也是最终值。启动升级迁移由 [`../migrations/`](../migrations/README.md) 的有序步骤负责，通过 SQLite `user_version` 跳过已完成步骤；旧 JSON 校验、备份后直接导入，不再生成新活动 JSON。旧操作备份先校验原始正文，再映射为数据库模板或接管状态引用。
 
-`configuration-fields.ts` 处理用户主动执行的归属字段移动，不参与启动升级迁移：将 Claude 共通模板中的 Header 和路由移入明确指定的供应商，写前备份，失败回滚；Claude Fast 和自动压缩按未管理字段保留。Codex 的 1M、压缩阈值及 Fast 均属于共通配置，不迁移到供应商或模型；两个工具的主思考强度也保留为共通顶层字段。Codex 原文标题旁的快捷设置只修改原文草稿，保存继续走原有共通模板校验、备份与并发保护。迁移只访问应用内供应商和共享模板，不读取或应用工具文件、不广播至其他供应商。Codex 的 API Key、地址和模型只写 `config.toml`。预览在主进程脱敏 Key 和任意命名的 Header 值后返回，不写文件。
+`configuration-fields.ts` 处理用户主动执行的归属字段移动，不参与启动升级迁移：将 Claude 共通模板中的 Header 和路由移入明确指定的供应商，写前备份，失败回滚；Claude Fast 和自动压缩按未管理字段保留。Codex 的 1M、压缩阈值及 Fast 均属于共通配置，不迁移到供应商或模型；两个工具的主思考强度也保留为共通顶层字段。两个工具原文标题旁的快捷设置只修改原文草稿，Claude 提供顶层思考强度及同时隐藏 commit、PR、session URL 的署名开关，Codex 提供 1M、压缩阈值及 Fast；保存继续走原有共通模板校验、备份与并发保护。迁移只访问应用内供应商和共享模板，不读取或应用工具文件、不广播至其他供应商。Codex 的 API Key、地址和模型只写 `config.toml`。预览在主进程脱敏 Key 和任意命名的 Header 值后返回，不写文件。
 
 `config-preview.ts` 对 API Key、Claude 的 `ANTHROPIC_AUTH_TOKEN` 和 Codex 的 `experimental_bearer_token` 复用供应商摘要的前后缀脱敏规则；其他令牌、密码和 Header 值保持完全隐藏。已知密钥在其他字符串中的副本也会脱敏，采用单次匹配替换，避免再次处理已生成的脱敏内容。
 

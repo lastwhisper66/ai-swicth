@@ -18,6 +18,7 @@ import {
 } from '@shared/configuration'
 import { modelPresetChoices } from '@renderer/lib/provider-form'
 import { ConfigurationSelect } from './ConfigurationSelect'
+import { ClaudeQuickSettings } from './ClaudeQuickSettings'
 import { CodexQuickSettings } from './CodexQuickSettings'
 import { ToolIcon } from '@renderer/components/ToolIcon'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
@@ -350,23 +351,21 @@ function CommonConfigEditor({
                     </FieldLabel>
                     <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                       {dirty && <Badge variant="outline">未保存</Badge>}
-                      {toolId === 'codex' && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          aria-expanded={quickSettingsOpen}
-                          aria-controls="codex-quick-settings"
-                          onClick={() => setQuickSettingsOpen((open) => !open)}
-                        >
-                          <SlidersHorizontal aria-hidden="true" />
-                          快捷设置
-                          <ChevronDown
-                            aria-hidden="true"
-                            className={quickSettingsOpen ? 'rotate-180' : undefined}
-                          />
-                        </Button>
-                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        aria-expanded={quickSettingsOpen}
+                        aria-controls={`${toolId}-quick-settings`}
+                        onClick={() => setQuickSettingsOpen((open) => !open)}
+                      >
+                        <SlidersHorizontal aria-hidden="true" />
+                        快捷设置
+                        <ChevronDown
+                          aria-hidden="true"
+                          className={quickSettingsOpen ? 'rotate-180' : undefined}
+                        />
+                      </Button>
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
                           <Button
@@ -413,13 +412,25 @@ function CommonConfigEditor({
                       </Button>
                     </div>
                   </div>
-                  {toolId === 'codex' && quickSettingsOpen && (
-                    <div id="codex-quick-settings" role="region" aria-label="Codex 快捷设置">
-                      <CodexQuickSettings
-                        root={root}
-                        disabled={busy}
-                        onChange={(next) => setContent(serializeConfiguration(toolId, next))}
-                      />
+                  {quickSettingsOpen && (
+                    <div
+                      id={`${toolId}-quick-settings`}
+                      role="region"
+                      aria-label={`${toolName} 快捷设置`}
+                    >
+                      {toolId === 'claude-code' ? (
+                        <ClaudeQuickSettings
+                          root={root}
+                          disabled={busy}
+                          onChange={(next) => setContent(serializeConfiguration(toolId, next))}
+                        />
+                      ) : (
+                        <CodexQuickSettings
+                          root={root}
+                          disabled={busy}
+                          onChange={(next) => setContent(serializeConfiguration(toolId, next))}
+                        />
+                      )}
                     </div>
                   )}
                   <Textarea
