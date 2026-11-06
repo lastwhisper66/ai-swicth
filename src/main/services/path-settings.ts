@@ -118,6 +118,14 @@ export class PathSettingsStore {
     return location
   }
 
+  async getSessionDirectories(toolId: ToolId): Promise<string[]> {
+    const configured = await this.getAvailable(toolId)
+    const defaultDirectory = isWslTool(toolId)
+      ? (await this.wsl.getLocation(toolId, configured.directory)).defaultDirectory
+      : getDefaultPath(toolId)
+    return [defaultDirectory, configured.directory]
+  }
+
   async checkBackupTarget(toolId: ToolId, targetPath: string): Promise<void> {
     if (isWslTool(toolId)) await this.wsl.getLocation(toolId, dirname(targetPath))
   }

@@ -196,6 +196,19 @@ exec "$location" "$@"`,
     }
   }
 
+  async isProcessRunning(pid: number, distribution: string): Promise<boolean> {
+    if (!Number.isSafeInteger(pid) || pid <= 0)
+      throw new AppError('INVALID_INPUT', '会话运行标记中的进程 ID 无效。')
+    const result = await this.execute(
+      'if kill -0 "$1" 2>/dev/null; then exit 0; fi; [ -d "/proc/$1" ]',
+      [String(pid)],
+      distribution,
+      15_000,
+      true
+    )
+    return result.exitCode === 0
+  }
+
   private async discoverIdentity(distribution?: string): Promise<WslIdentity> {
     const result = await this.execute(
       `user_id=$(id -u) || exit 1

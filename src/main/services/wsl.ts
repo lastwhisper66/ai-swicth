@@ -30,6 +30,7 @@ export class WslService {
     directory: string
     distribution: string
     environmentOverride: boolean
+    defaultDirectory: string
   }> {
     const custom = customDirectory ? parseWslPath(customDirectory) : null
     const environment = await this.getEnvironment(custom?.distribution)
@@ -50,6 +51,10 @@ export class WslService {
     return {
       directory: custom?.directory ?? toWslPath(environment.distribution, linuxDirectory),
       distribution: environment.distribution,
+      defaultDirectory: toWslPath(
+        environment.distribution,
+        posix.join(environment.home, baseToolId(toolId) === 'claude-code' ? '.claude' : '.codex')
+      ),
       environmentOverride: Boolean(override)
     }
   }

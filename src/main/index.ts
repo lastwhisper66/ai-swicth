@@ -30,6 +30,8 @@ import icon from '../../resources/icon.png?asset'
 import windowsIcon from '../../resources/icon.ico?asset'
 import { CopilotService } from './services/copilot'
 import { registerCopilotIpc } from './copilot-ipc'
+import { registerSessionIpc } from './sessions/ipc'
+import { SessionService } from './sessions/service'
 
 if (is.dev && process.env.AI_SWITCH_USER_DATA_DIR) {
   app.setPath('userData', resolve(process.env.AI_SWITCH_USER_DATA_DIR))
@@ -43,6 +45,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock()
 let database: AppDatabase | null = null
 let appSettings: AppSettingsStore | null = null
 let applications: ApplicationManagementService | null = null
+let sessions: SessionService | null = null
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
@@ -64,6 +67,12 @@ function showMainWindow(): void {
 
 app.on('second-instance', showMainWindow)
 app.on('before-quit', (event) => {
+  if (sessions?.hasRunningTasks()) {
+    event.preventDefault()
+    showMainWindow()
+    dialog.showErrorBox('会话操作正在进行', '请等待当前会话操作结束后再退出，以免中断删除。')
+    return
+  }
   if (applications?.hasRunningTasks()) {
     event.preventDefault()
     showMainWindow()
@@ -76,6 +85,8 @@ app.on('before-quit', (event) => {
   isQuitting = true
 })
 app.on('will-quit', () => {
+  sessions?.close()
+  sessions = null
   database?.close()
   database = null
   tray?.destroy()
@@ -259,8 +270,11 @@ app.whenReady().then(async () => {
   )
   const unregisterIpc = registerAppIpc(rendererUrl, controller)
   const unregisterCopilot = registerCopilotIpc(rendererUrl, new CopilotService(database, targets))
+  sessions = new SessionService(database, pathSettings, wslRuntime)
+  const unregisterSessions = registerSessionIpc(rendererUrl, sessions)
   app.once('will-quit', unregisterIpc)
   app.once('will-quit', unregisterCopilot)
+  app.once('will-quit', unregisterSessions)
 
   createTray()
   isInitialized = true

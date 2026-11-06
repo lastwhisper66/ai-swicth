@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { COPILOT_CHANNELS } from '@shared/copilot'
+import { SESSION_CHANNELS } from '@shared/sessions'
 import {
   APPLICATION_TASK_CHANGED,
   APPLICATION_DETECTED,
@@ -12,6 +13,13 @@ import {
 } from '@shared/ipc'
 
 const api: DesktopApi = {
+  sessions: {
+    list: (input) => ipcRenderer.invoke(SESSION_CHANNELS.list, input),
+    read: (input) => ipcRenderer.invoke(SESSION_CHANNELS.read, input),
+    selectAll: (input) => ipcRenderer.invoke(SESSION_CHANNELS.selectAll, input),
+    previewDelete: (input) => ipcRenderer.invoke(SESSION_CHANNELS.previewDelete, input),
+    delete: (input) => ipcRenderer.invoke(SESSION_CHANNELS.delete, input)
+  },
   copilot: {
     snapshot: () => ipcRenderer.invoke(COPILOT_CHANNELS.snapshot),
     getProvider: (input) => ipcRenderer.invoke(COPILOT_CHANNELS.getProvider, input),

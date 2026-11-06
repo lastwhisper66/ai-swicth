@@ -106,6 +106,94 @@
   -webkit-app-region: no-drag;
 }
 
+.session-markdown {
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+}
+
+.session-markdown > :first-child {
+  margin-top: 0;
+}
+.session-markdown > :last-child {
+  margin-bottom: 0;
+}
+.session-markdown p,
+.session-markdown pre,
+.session-markdown ul,
+.session-markdown ol,
+.session-markdown blockquote,
+.session-markdown table {
+  margin-block: 0.75em;
+}
+.session-markdown h1,
+.session-markdown h2,
+.session-markdown h3,
+.session-markdown h4 {
+  margin-block: 1em 0.5em;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.session-markdown h1 {
+  font-size: 1.4em;
+}
+.session-markdown h2 {
+  font-size: 1.2em;
+}
+.session-markdown h3 {
+  font-size: 1.1em;
+}
+.session-markdown ul {
+  padding-left: 1.5em;
+  list-style: disc;
+}
+.session-markdown ol {
+  padding-left: 1.5em;
+  list-style: decimal;
+}
+.session-markdown blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 1em;
+  color: var(--muted-foreground);
+}
+.session-markdown code {
+  border-radius: 0.25rem;
+  background: var(--muted);
+  padding: 0.15em 0.3em;
+  font-size: 0.9em;
+}
+.session-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: 0.5rem;
+  background: var(--muted);
+  padding: 1em;
+  line-height: 1.6;
+}
+.session-markdown pre code {
+  padding: 0;
+  background: transparent;
+}
+.session-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.session-markdown th,
+.session-markdown td {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.8em;
+}
+.session-markdown th {
+  background: var(--muted);
+  font-weight: 600;
+}
+.session-markdown hr {
+  margin-block: 1em;
+  border-color: var(--border);
+}
+
 .application-sorting,
 .application-sorting * {
   cursor: grabbing !important;

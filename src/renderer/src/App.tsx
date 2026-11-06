@@ -25,6 +25,7 @@ import { ProviderForm } from '@renderer/components/features/ProviderForm'
 import { SettingsPage, type SettingsSection } from '@renderer/components/features/SettingsPage'
 import { ToolConfigPage } from '@renderer/components/features/ToolConfigPage'
 import { CopilotPage } from '@renderer/components/features/CopilotPage'
+import { SessionsPage } from '@renderer/components/features/SessionsPage'
 import { ToolFeaturesPage } from '@renderer/components/features/ToolFeaturesPage'
 import type { ToolPageSection } from '@renderer/components/features/ToolPageActions'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
@@ -35,7 +36,7 @@ import { useApplications } from '@renderer/hooks/use-applications'
 import { moveItem } from '@renderer/lib/sort-order'
 
 type ProviderEditorState = { provider: ProviderSummary | null; toolId: ToolId } | null
-type MainView = ToolId | 'settings' | 'applications' | 'copilot'
+type MainView = ToolId | 'settings' | 'applications' | 'copilot' | 'sessions'
 const initialPreferences: ApplicationPreferences = {
   visible: Object.fromEntries(TOOL_IDS.map((id) => [id, true])) as Record<ToolId, boolean>,
   wsl: {},
@@ -83,6 +84,7 @@ function App(): React.JSX.Element {
           current !== 'settings' &&
           current !== 'applications' &&
           current !== 'copilot' &&
+          current !== 'sessions' &&
           !result.applicationPreferences.visible[current]
             ? 'applications'
             : current
@@ -274,6 +276,7 @@ function App(): React.JSX.Element {
         current !== 'settings' &&
         current !== 'applications' &&
         current !== 'copilot' &&
+        current !== 'sessions' &&
         !nextSnapshot.applicationPreferences.visible[current]
           ? 'applications'
           : current
@@ -288,6 +291,7 @@ function App(): React.JSX.Element {
         current !== 'settings' &&
         current !== 'applications' &&
         current !== 'copilot' &&
+        current !== 'sessions' &&
         !result.applicationPreferences.visible[current]
           ? 'applications'
           : current
@@ -569,8 +573,12 @@ function App(): React.JSX.Element {
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <TitleBar />
-          <main className="min-h-0 min-w-0 flex-1 overflow-y-auto scrollbar-gutter-both">
-            <div className="w-full min-w-0 px-5 py-6 lg:px-8 lg:py-8">
+          <main
+            className={`min-h-0 min-w-0 flex-1 ${view === 'sessions' ? 'overflow-hidden' : 'overflow-y-auto scrollbar-gutter-both'}`}
+          >
+            <div
+              className={`w-full min-w-0 ${view === 'sessions' ? 'h-full px-4 py-4 lg:px-6' : 'px-5 py-6 lg:px-8 lg:py-8'}`}
+            >
               {connectionError && (
                 <Alert variant="destructive" className="mb-4">
                   <AlertCircle aria-hidden="true" />
@@ -581,7 +589,19 @@ function App(): React.JSX.Element {
                   </Button>
                 </Alert>
               )}
-              {view === 'copilot' ? (
+              {view === 'sessions' ? (
+                <SessionsPage
+                  onBusyChange={(pending) =>
+                    setPendingKey((current) =>
+                      pending
+                        ? (current ?? 'sessions:operation')
+                        : current === 'sessions:operation'
+                          ? null
+                          : current
+                    )
+                  }
+                />
+              ) : view === 'copilot' ? (
                 <CopilotPage
                   key={toolNavigation}
                   busy={pendingKey !== null}
