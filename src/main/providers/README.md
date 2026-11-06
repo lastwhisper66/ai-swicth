@@ -2,7 +2,11 @@
 
 在此维护供应商数据模型、输入校验和本地存储。API Key 的读写只允许在主进程处理，提供给界面的列表数据默认脱敏。
 
+`copilot.ts` 在独立的 `copilot_providers` 表存储原生 Custom Endpoint 文档，校验名称、协议、模型 URL、能力、token 上限、请求头及可移植记录；支持 `contextWindow` 推算输入容量，保留未知的 JSON 高级字段。API 类型按模型保存；兼容读取旧供应商默认类型，先补齐未指定协议的模型再移除顶层 `apiType`，模型原有覆盖值优先。表单新增模型的 `toolCalling`、`vision`、`streaming`、`thinking` 均为 `true`，`supportsReasoningEffort` 默认包含 `low`、`medium`、`high`、`xhigh`、`max`；已有记录不补写能力值或思考强度，以保留原有配置。普通快照只返回脱敏摘要，只有打开供应商编辑器时读取完整文档；保存不写入 VS Code。Copilot 与既有 Claude Code/Codex 供应商模型独立，加密云端存档及覆盖前本机快照包含其记录。
+
 首页与设置的供应商列表共用数据库 `providers.position` 顺序，本机和 WSL 筛选后保持同一相对顺序。`providers:set-order` 只接收完整且唯一的现有供应商 ID 列表，经主进程校验后在同步事务内更新位置，不修改凭据、更新时间或真实工具配置。新增记录追加末尾，编辑记录保持位置；供应商可移植导出和恢复保留数组顺序。渲染层共用 `SortableList.tsx`，通过新版 dnd-kit 提供独立手柄、拖动预览、占位、键盘操作和减少动态效果支持，保存失败回退。
+
+Copilot 首页同样复用 `SortableList.tsx`，保留独立拖动手柄及多选框。`copilot:set-order` 校验完整且唯一的供应商 ID 列表，通过 Copilot 操作队列在同步事务内更新 `copilot_providers.position`，并返回含最新签名的脱敏快照。排序不更新供应商文档、凭据或真实工具文件，已有应用状态和勾选状态保留；保存失败时界面回退原顺序。新增供应商以当前最大位置加一追加，避免删除后新增与其他位置重复；编辑保持位置，云端导出及恢复沿用数组顺序。
 
 列表和完整配置复用 `utils/api-key.ts` 的前后缀脱敏规则。进入供应商编辑器时，主进程通过校验来源和供应商 ID 的 `providers:get-secrets` IPC 返回该供应商的 API Key 与各工具请求头值；不把这些值加入普通快照。API Key 载入密码输入框并默认隐藏，眼睛只切换显示方式；自定义请求头值使用普通文本输入框。界面将读取值与修改草稿分开保存，只查看后保存继续使用 keep，用户编辑后才使用 replace。载入期间禁用相关输入和保存，失败时可重试，退出编辑器后的异步响应不会更新表单。
 

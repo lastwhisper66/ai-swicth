@@ -1,6 +1,9 @@
 import { baseToolId, isWslTool } from '@shared/ipc'
+import { readdir } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type {
   ApplyResult,
+  CleanupCodexProvidersResult,
   CommonConfig,
   CommonConfigInput,
   ConfigPreview,
@@ -35,10 +38,20 @@ import { redactConfiguration } from './config-preview'
 import type { PathSettingsStore } from './path-settings'
 import { ManagedStateStore } from './managed-state'
 import { moveConfigurationFields } from './configuration-fields'
+import { cleanupCodexProviders } from '../adapters/codex'
+import type { ProviderCleanupPreview } from '@shared/provider-cleanup'
 
 interface ConfigurationWrite extends GeneratedToolConfiguration {
   relatedContents?: Record<string, string>
   expectedContents?: Record<string, string | null>
+}
+
+interface CodexCleanupPlan {
+  path: string
+  original: string | null
+  profileFiles: Record<string, string | null>
+  generated: ReturnType<typeof cleanupCodexProviders>
+  preview: ProviderCleanupPreview
 }
 
 export class SwitchService {
@@ -176,6 +189,108 @@ export class SwitchService {
       conflicts,
       warnings: commonSnapshot.warnings
     }
+  }
+
+  async previewCodexCleanup(toolId: 'codex' | 'codex-wsl'): Promise<ProviderCleanupPreview> {
+    return this.withToolLock(toolId, async () => (await this.planCodexCleanup(toolId)).preview)
+  }
+
+  async cleanupCodexProviders(
+    toolId: 'codex' | 'codex-wsl',
+    revision: string
+  ): Promise<CleanupCodexProvidersResult> {
+    return this.withToolLock(toolId, async () => {
+      const { path, original, profileFiles, generated, preview } =
+        await this.planCodexCleanup(toolId)
+      if (revision !== preview.revision)
+        throw new AppError(
+          'CONCURRENT_MODIFICATION',
+          '清理预览已过期，配置、供应商或 Profile 已改变，请重新预览后确认。'
+        )
+      const warnings = preview.warnings
+      if (!generated.removedCount)
+        return {
+          toolId,
+          backupId: null,
+          removedCount: 0,
+          message: '没有可清理的未管理供应商。',
+          warnings
+        }
+      const statePath = this.managedStates.getReference(toolId)
+      const originalState = await this.targets.read(statePath)
+      const backupId = await this.writeConfiguration(
+        {
+          toolId,
+          targetPath: path,
+          content: original,
+          additionalFiles: [{ path: statePath, content: originalState }],
+          reason: 'cleanup',
+          providerId: null,
+          providerName: null
+        },
+        { content: generated.content, warnings: [], expectedContents: profileFiles },
+        (content, related) => {
+          if (content !== generated.content || related[statePath] !== originalState)
+            throw new AppError('WRITE_FAILED', 'Codex 配置或接管状态读回校验失败。')
+        }
+      )
+      return {
+        toolId,
+        backupId,
+        removedCount: generated.removedCount,
+        message: `已清理 ${generated.removedCount} 个未管理供应商，并保留清理前的备份。新建或重启 Codex 会话后生效。`,
+        warnings
+      }
+    })
+  }
+
+  private async planCodexCleanup(toolId: 'codex' | 'codex-wsl'): Promise<CodexCleanupPlan> {
+    const target = await this.pathSettings.getAvailable(toolId)
+    const original = await this.targets.read(target.path)
+    const profileFiles: Record<string, string | null> = {}
+    if (original !== null) {
+      const directory = dirname(target.path)
+      // Codex 0.134+ uses sibling profile files; older versions use inline profiles.
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        if (!/^[\w-]+\.config\.toml$/iu.test(entry.name) || entry.isDirectory()) continue
+        const path = join(directory, entry.name)
+        profileFiles[path] = await this.targets.read(path)
+      }
+    }
+    const providers = await this.providerStore.list()
+    const generated = cleanupCodexProviders(
+      original ?? '',
+      providers
+        .filter((provider) => provider.tools.includes('codex'))
+        .map((provider) => provider.id),
+      profileFiles
+    )
+    const preview: ProviderCleanupPreview = {
+      path: target.path,
+      language: 'toml',
+      revision: hashContent(
+        JSON.stringify([
+          toolId,
+          target.path,
+          hashContent(original),
+          providers,
+          Object.entries(profileFiles)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([path, text]) => [path, hashContent(text)])
+        ])
+      ),
+      entries: generated.entries,
+      hasChanges: generated.removedCount > 0,
+      notes: generated.removedCount
+        ? ['TOML 文件会重新排版，原始注释将保存在清理前的备份中。']
+        : [],
+      warnings: generated.referencedCount
+        ? [
+            `另有 ${generated.referencedCount} 个未管理供应商仍被当前选择或 Profile 引用，已保留；请先切换供应商或修改 Profile 后再清理。`
+          ]
+        : []
+    }
+    return { path: target.path, original, profileFiles, generated, preview }
   }
 
   async saveCommonConfig(input: SaveCommonConfigInput): Promise<SaveCommonConfigResult> {

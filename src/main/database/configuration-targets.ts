@@ -40,19 +40,33 @@ export class ConfigurationTargets {
       })
   }
 
-  async replace(changes: Record<string, string | null>, createParent = false): Promise<void> {
+  async replace(
+    changes: Record<string, string | null>,
+    createParent = false,
+    options: { expected?: Record<string, string | null>; commit?: () => void } = {}
+  ): Promise<void> {
     const operation: PendingOperation = { files: [], records: [] }
     for (const [target, after] of Object.entries(changes)) {
       const before = await this.read(target)
+      if (options.expected && before !== options.expected[target])
+        throw new AppError('CONCURRENT_MODIFICATION', '工具配置已被外部修改，请刷新预览后重试。')
       if (parseRecordReference(target)) {
         this.validateRecord(target, after)
         operation.records.push({ reference: target, before, after })
       } else operation.files.push({ path: target, before, after })
     }
+    const verifyUnchanged = async (): Promise<void> => {
+      for (const [target, expected] of Object.entries(options.expected ?? {})) {
+        if (!Object.hasOwn(changes, target) && (await this.read(target)) !== expected)
+          throw new AppError('CONCURRENT_MODIFICATION', '工具配置已被外部修改，请刷新后重试。')
+      }
+    }
+    await verifyUnchanged()
     // Database-only updates need no external recovery journal.
     if (!operation.files.length) {
       this.database.transaction(() => {
         for (const r of operation.records) this.database.writeRecord(r.reference, r.after)
+        options.commit?.()
       })
       return
     }
@@ -70,12 +84,14 @@ export class ConfigurationTargets {
         if ((await this.read(file.path)) !== file.after)
           throw new Error('Write verification failed')
       }
+      await verifyUnchanged()
       this.database.transaction(() => {
         for (const record of operation.records) {
           if (this.database.readRecord(record.reference) !== record.before)
             throw new AppError('CONCURRENT_MODIFICATION', '应用配置已发生变化，请刷新后重试。')
           this.database.writeRecord(record.reference, record.after)
         }
+        options.commit?.()
         this.database.sql.prepare('DELETE FROM pending_operations WHERE id = ?').run(id)
       })
     } catch (error) {

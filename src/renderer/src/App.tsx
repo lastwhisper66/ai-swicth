@@ -1,7 +1,7 @@
 import { startTransition, useEffect, useRef, useState } from 'react'
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
-import { baseToolId, TOOL_IDS } from '@shared/ipc'
+import { TOOL_IDS } from '@shared/ipc'
 import { APPLICATION_IDS, APPLICATION_INSTANCES, type ApplicationId } from '@shared/applications'
 import type {
   ApiResult,
@@ -16,12 +16,17 @@ import type {
   OperationResponse,
   ToolId
 } from '@shared/ipc'
+import type { ProviderCleanupPreview } from '@shared/provider-cleanup'
+import { ProviderCleanupDialog } from '@renderer/components/features/ProviderCleanupDialog'
 import { AppSidebar } from '@renderer/components/AppSidebar'
 import { ApplicationsPage } from '@renderer/components/features/ApplicationsPage'
 import { TitleBar } from '@renderer/components/TitleBar'
 import { ProviderForm } from '@renderer/components/features/ProviderForm'
 import { SettingsPage, type SettingsSection } from '@renderer/components/features/SettingsPage'
 import { ToolConfigPage } from '@renderer/components/features/ToolConfigPage'
+import { CopilotPage } from '@renderer/components/features/CopilotPage'
+import { ToolFeaturesPage } from '@renderer/components/features/ToolFeaturesPage'
+import type { ToolPageSection } from '@renderer/components/features/ToolPageActions'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import { Button } from '@renderer/components/ui/button'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
@@ -30,7 +35,7 @@ import { useApplications } from '@renderer/hooks/use-applications'
 import { moveItem } from '@renderer/lib/sort-order'
 
 type ProviderEditorState = { provider: ProviderSummary | null; toolId: ToolId } | null
-type MainView = ToolId | 'settings' | 'applications'
+type MainView = ToolId | 'settings' | 'applications' | 'copilot'
 const initialPreferences: ApplicationPreferences = {
   visible: Object.fromEntries(TOOL_IDS.map((id) => [id, true])) as Record<ToolId, boolean>,
   wsl: {},
@@ -52,11 +57,18 @@ function App(): React.JSX.Element {
   const [applicationTasks, setApplicationTasks] = useState<ApplicationTask[]>([])
   const completedApplicationTasks = useRef(new Set<string>())
   const [providerEditor, setProviderEditor] = useState<ProviderEditorState>(null)
-  const [settingsTool, setSettingsTool] = useState<ToolId>('claude-code')
+  const [toolSection, setToolSection] = useState<ToolPageSection>('home')
+  const [toolNavigation, setToolNavigation] = useState(0)
   const [view, setView] = useState<MainView>('claude-code')
   const applicationList = useApplications(applicationTasks, view === 'applications')
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
   const [pendingKey, setPendingKey] = useState<string | null>(null)
+  const cleaningCodexProviders = useRef(false)
+  const [codexCleanup, setCodexCleanup] = useState<{
+    toolId: 'codex' | 'codex-wsl'
+    preview: ProviderCleanupPreview
+  } | null>(null)
+  const [codexCleanupError, setCodexCleanupError] = useState<string | null>(null)
   const [collapseSaving, setCollapseSaving] = useState(false)
   const [applicationOrderSaving, setApplicationOrderSaving] = useState(false)
   const savingApplicationOrder = useRef(false)
@@ -70,6 +82,7 @@ function App(): React.JSX.Element {
         setView((current) =>
           current !== 'settings' &&
           current !== 'applications' &&
+          current !== 'copilot' &&
           !result.applicationPreferences.visible[current]
             ? 'applications'
             : current
@@ -260,6 +273,7 @@ function App(): React.JSX.Element {
       setView((current) =>
         current !== 'settings' &&
         current !== 'applications' &&
+        current !== 'copilot' &&
         !nextSnapshot.applicationPreferences.visible[current]
           ? 'applications'
           : current
@@ -273,6 +287,7 @@ function App(): React.JSX.Element {
       setView((current) =>
         current !== 'settings' &&
         current !== 'applications' &&
+        current !== 'copilot' &&
         !result.applicationPreferences.visible[current]
           ? 'applications'
           : current
@@ -409,6 +424,54 @@ function App(): React.JSX.Element {
     }
   }
 
+  async function previewCodexCleanup(toolId: 'codex' | 'codex-wsl'): Promise<void> {
+    if (pendingKey || cleaningCodexProviders.current) return
+    cleaningCodexProviders.current = true
+    setPendingKey(`cleanup:${toolId}`)
+    try {
+      const result = await window.api.previewCodexCleanup({ toolId })
+      if (!result.ok) {
+        setCodexCleanupError(result.error.message)
+        return showError(result.error.message)
+      }
+      setCodexCleanup({ toolId, preview: result.value })
+      setCodexCleanupError(null)
+    } catch {
+      const message = '无法读取清理预览，请重新打开应用后重试。'
+      setCodexCleanupError(message)
+      showError(message)
+    } finally {
+      cleaningCodexProviders.current = false
+      setPendingKey(null)
+    }
+  }
+
+  async function confirmCodexCleanup(): Promise<void> {
+    if (pendingKey || cleaningCodexProviders.current || !codexCleanup?.preview.hasChanges) return
+    cleaningCodexProviders.current = true
+    const { toolId, preview } = codexCleanup
+    setPendingKey(`cleanup:${toolId}`)
+    try {
+      const result = await window.api.cleanupCodexProviders({ toolId, revision: preview.revision })
+      if (!result.ok) {
+        setCodexCleanupError(result.error.message)
+        return showError(result.error.message)
+      }
+      setCodexCleanup(null)
+      adoptSnapshot(result.value.snapshot)
+      const { message, warnings } = result.value.operation
+      if (warnings.length) showWarning(`${message} ${warnings.join(' ')}`)
+      else showSuccess(message)
+    } catch {
+      const message = '清理未完成，请重新预览后重试。'
+      setCodexCleanupError(message)
+      showError(message)
+    } finally {
+      cleaningCodexProviders.current = false
+      setPendingKey(null)
+    }
+  }
+
   async function resetPath(toolId: ToolId): Promise<void> {
     await runSnapshotOperation(
       `path:${toolId}:reset`,
@@ -480,9 +543,8 @@ function App(): React.JSX.Element {
   }
 
   function openProviderEditor(toolId: ToolId, provider: ProviderSummary | null = null): void {
-    setView('settings')
-    setSettingsSection('providers')
-    setSettingsTool(baseToolId(toolId))
+    setView(toolId)
+    setToolSection('editor')
     setProviderEditor({ provider, toolId })
   }
 
@@ -499,6 +561,9 @@ function App(): React.JSX.Element {
           onOrderChange={setApplicationOrder}
           onViewChange={(nextView) => {
             if (nextView === 'settings') setSettingsSection('general')
+            setProviderEditor(null)
+            setToolSection('home')
+            setToolNavigation((current) => current + 1)
             setView(nextView)
           }}
         />
@@ -516,7 +581,21 @@ function App(): React.JSX.Element {
                   </Button>
                 </Alert>
               )}
-              {view === 'applications' ? (
+              {view === 'copilot' ? (
+                <CopilotPage
+                  key={toolNavigation}
+                  busy={pendingKey !== null}
+                  onBusyChange={(pending) =>
+                    setPendingKey((current) =>
+                      pending
+                        ? (current ?? 'copilot:operation')
+                        : current === 'copilot:operation'
+                          ? null
+                          : current
+                    )
+                  }
+                />
+              ) : view === 'applications' ? (
                 <ApplicationsPage
                   list={applicationList}
                   preferences={snapshot?.applicationPreferences ?? initialPreferences}
@@ -538,47 +617,10 @@ function App(): React.JSX.Element {
                   settings={snapshot.settings}
                   onCloseBehaviorChange={(behavior) => void setCloseBehavior(behavior)}
                   onSectionChange={setSettingsSection}
-                  providers={snapshot.providers}
-                  tools={snapshot.tools}
-                  toolErrors={toolErrors}
-                  onRetryTool={(toolId) => void loadTool(toolId)}
                   backups={snapshot.backups}
                   cloudBackup={snapshot.settings.cloudBackup}
                   pendingKey={pendingKey}
                   busy={pendingKey !== null}
-                  providerTool={settingsTool}
-                  onProviderToolChange={setSettingsTool}
-                  providerEditor={
-                    providerEditor && (
-                      <ProviderForm
-                        key={`${providerEditor.toolId}:${providerEditor.provider?.id ?? 'new'}`}
-                        provider={providerEditor.provider}
-                        toolId={providerEditor.toolId}
-                        currentModelId={
-                          providerEditor.provider?.id ===
-                          snapshot.tools[providerEditor.toolId]?.currentProviderId
-                            ? (snapshot.tools[providerEditor.toolId]?.currentModelId ?? null)
-                            : null
-                        }
-                        onCancel={() => setProviderEditor(null)}
-                        onPendingChange={(pending) =>
-                          setPendingKey(pending ? 'provider:save' : null)
-                        }
-                        onSaved={(nextSnapshot, message) => {
-                          adoptSnapshot(nextSnapshot)
-                          setProviderEditor(null)
-                          showSuccess(message)
-                        }}
-                      />
-                    )
-                  }
-                  onAddProvider={openProviderEditor}
-                  onEditProvider={(provider, toolId) => openProviderEditor(toolId, provider)}
-                  onDeleteProvider={(providerId) => void deleteProvider(providerId)}
-                  onMoveProvider={moveProvider}
-                  onPickPath={(toolId) => void pickPath(toolId)}
-                  onResetPath={(toolId) => void resetPath(toolId)}
-                  onOpenLocation={(input) => void openToolLocation(input)}
                   onRestore={(backupId) => void restoreBackup(backupId)}
                   onSaveCloudBackup={saveCloudBackupSettings}
                   onSaveCloudBackupPassword={saveCloudBackupPassword}
@@ -591,11 +633,15 @@ function App(): React.JSX.Element {
                     void restoreConfigurationBackup(backupId)
                   }
                   configurationBackups={snapshot.configurationBackups}
-                  onPendingChange={(pending) => setPendingKey(pending ? 'common:save' : null)}
-                  onCommonSaved={(nextSnapshot, message) => {
-                    adoptSnapshot(nextSnapshot)
-                    showSuccess(message)
-                  }}
+                  onPendingChange={(pending) =>
+                    setPendingKey((current) =>
+                      pending
+                        ? (current ?? 'copilot:operation')
+                        : current === 'copilot:operation'
+                          ? null
+                          : current
+                    )
+                  }
                 />
               ) : view === 'settings' ? (
                 <div className="space-y-5" aria-busy="true">
@@ -608,6 +654,7 @@ function App(): React.JSX.Element {
                 <ToolConfigPage
                   toolId={view}
                   status={snapshot?.tools[view]}
+                  tools={snapshot?.tools ?? {}}
                   providers={snapshot?.providers}
                   statusError={toolErrors[view] ?? (!snapshot ? connectionError : null)}
                   onRetry={() => void (snapshot ? loadTool(view) : retryConnection())}
@@ -620,16 +667,80 @@ function App(): React.JSX.Element {
                   onApply={(toolId, providerId, modelId) =>
                     void applyProvider(toolId, providerId, modelId)
                   }
+                  onCleanupProviders={(toolId) => void previewCodexCleanup(toolId)}
+                  cleanupPending={pendingKey === `cleanup:${view}`}
                   onAdd={openProviderEditor}
                   onEdit={(provider) => openProviderEditor(view, provider)}
                   onDelete={(providerId) => void deleteProvider(providerId)}
                   onMove={moveProvider}
-                />
+                  section={toolSection}
+                  onHome={() => {
+                    setProviderEditor(null)
+                    setToolSection('home')
+                  }}
+                  onConfigure={() => {
+                    setProviderEditor(null)
+                    setToolSection('configuration')
+                  }}
+                >
+                  {providerEditor && providerEditor.toolId === view ? (
+                    <ProviderForm
+                      key={`${view}:${providerEditor.provider?.id ?? 'new'}`}
+                      provider={providerEditor.provider}
+                      toolId={view}
+                      currentModelId={
+                        providerEditor.provider?.id === snapshot?.tools[view]?.currentProviderId
+                          ? (snapshot?.tools[view]?.currentModelId ?? null)
+                          : null
+                      }
+                      onCancel={() => {
+                        setProviderEditor(null)
+                        setToolSection('home')
+                      }}
+                      onPendingChange={(pending) => setPendingKey(pending ? 'provider:save' : null)}
+                      onSaved={(nextSnapshot, message) => {
+                        adoptSnapshot(nextSnapshot)
+                        setProviderEditor(null)
+                        setToolSection('home')
+                        showSuccess(message)
+                      }}
+                    />
+                  ) : toolSection === 'configuration' && snapshot ? (
+                    <ToolFeaturesPage
+                      key={view}
+                      toolId={view}
+                      providers={snapshot.providers}
+                      status={snapshot.tools[view]}
+                      statusError={toolErrors[view]}
+                      busy={pendingKey !== null}
+                      onRetry={() => void loadTool(view)}
+                      onPickPath={(toolId) => void pickPath(toolId)}
+                      onResetPath={(toolId) => void resetPath(toolId)}
+                      onOpenLocation={(input) => void openToolLocation(input)}
+                      onPendingChange={(pending) => setPendingKey(pending ? 'common:save' : null)}
+                      onSaved={(nextSnapshot, message) => {
+                        adoptSnapshot(nextSnapshot)
+                        showSuccess(message)
+                      }}
+                    />
+                  ) : null}
+                </ToolConfigPage>
               )}
             </div>
           </main>
         </div>
       </div>
+      <ProviderCleanupDialog
+        toolName={codexCleanup?.toolId === 'codex-wsl' ? 'Codex WSL' : 'Codex'}
+        preview={codexCleanup?.preview ?? null}
+        busy={pendingKey !== null}
+        error={codexCleanupError}
+        onClose={() => setCodexCleanup(null)}
+        onRefresh={() => {
+          if (codexCleanup) void previewCodexCleanup(codexCleanup.toolId)
+        }}
+        onConfirm={() => void confirmCodexCleanup()}
+      />
     </TooltipProvider>
   )
 }

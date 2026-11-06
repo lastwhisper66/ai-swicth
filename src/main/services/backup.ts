@@ -349,6 +349,7 @@ function isBackupRecord(value: unknown): value is BackupRecord {
     (value.reason === 'apply' ||
       value.reason === 'restore' ||
       value.reason === 'common' ||
+      value.reason === 'cleanup' ||
       value.reason === 'template') &&
     typeof value.originalFileExisted === 'boolean' &&
     (value.relatedPaths === undefined ||

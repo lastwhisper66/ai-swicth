@@ -3,7 +3,6 @@ import { baseToolId } from '@shared/ipc'
 import { useEffect, useState } from 'react'
 import { AlertCircle, ChevronDown, Download, Save, SlidersHorizontal } from 'lucide-react'
 import {
-  PROVIDER_TOOL_IDS,
   type AppSnapshot,
   type CommonConfig,
   type ProviderSummary,
@@ -20,7 +19,6 @@ import { modelPresetChoices } from '@renderer/lib/provider-form'
 import { ConfigurationSelect } from './ConfigurationSelect'
 import { ClaudeQuickSettings } from './ClaudeQuickSettings'
 import { CodexQuickSettings } from './CodexQuickSettings'
-import { ToolIcon } from '@renderer/components/ToolIcon'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
 import {
   AlertDialog,
@@ -38,67 +36,41 @@ import { Button } from '@renderer/components/ui/button'
 import { Card, CardContent } from '@renderer/components/ui/card'
 import { Field, FieldDescription, FieldLabel } from '@renderer/components/ui/field'
 import { Spinner } from '@renderer/components/ui/spinner'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@renderer/components/ui/tabs'
 import { Textarea } from '@renderer/components/ui/textarea'
 
 export function CommonConfigPage({
+  toolId,
   busy,
   providers,
   onPendingChange,
   onSaved
 }: {
+  toolId: ProviderToolId
   busy: boolean
   providers: ProviderSummary[]
   onPendingChange: (pending: boolean) => void
   onSaved: (snapshot: AppSnapshot, message: string) => void
 }): React.JSX.Element {
-  const [toolId, setToolId] = useState<ProviderToolId>('claude-code')
-  const [openedTools, setOpenedTools] = useState<ProviderToolId[]>(['claude-code'])
   return (
     <div className="space-y-5">
       <div>
         <h2 className="text-base font-semibold">共通配置</h2>
         <p className="mt-1 text-sm leading-6 text-muted-foreground">
-          每个工具的本机与 WSL 共用一份配置。直接编辑并保存共通配置原文。
+          {TOOL_NAMES[toolId]} 的本机与 WSL
+          共用这份功能配置。保存后，重新应用供应商即可写入对应环境。
         </p>
       </div>
-      <Tabs
-        value={toolId}
-        onValueChange={(value) => {
-          if (PROVIDER_TOOL_IDS.includes(value as ProviderToolId)) {
-            const id = value as ProviderToolId
-            setToolId(id)
-            setOpenedTools((previous) => (previous.includes(id) ? previous : [...previous, id]))
-          }
-        }}
-      >
-        <TabsList
-          className="grid w-full grid-cols-2 group-data-[orientation=horizontal]/tabs:h-auto xl:inline-flex xl:w-auto"
-          aria-label="共通配置所属工具"
-        >
-          {PROVIDER_TOOL_IDS.map((id) => (
-            <TabsTrigger key={id} value={id} disabled={busy} className="h-9 gap-2 px-3">
-              <ToolIcon toolId={id} />
-              {TOOL_NAMES[id]}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-        {openedTools.map((id) => (
-          <TabsContent key={id} value={id} forceMount className="mt-3 data-[state=inactive]:hidden">
-            <CommonConfigEditor
-              toolId={id}
-              providers={providers}
-              busy={busy}
-              onPendingChange={onPendingChange}
-              onSaved={onSaved}
-            />
-          </TabsContent>
-        ))}
-      </Tabs>
+      <CommonConfigEditor
+        key={toolId}
+        toolId={toolId}
+        providers={providers}
+        busy={busy}
+        onPendingChange={onPendingChange}
+        onSaved={onSaved}
+      />
     </div>
   )
 }
-
 function CommonConfigEditor({
   toolId,
   providers,
@@ -326,7 +298,7 @@ function CommonConfigEditor({
                         </AlertDialog>
                       </>
                     ) : (
-                      <p>请先在供应商设置中添加此工具的供应商和模型，再回来迁移。</p>
+                      <p>请先点击当前工具横幅上的“添加供应商”，保存供应商和模型后再回来迁移。</p>
                     )}
                   </AlertDescription>
                 </Alert>

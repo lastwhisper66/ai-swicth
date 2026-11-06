@@ -5,6 +5,7 @@ import { isObject } from '@shared/configuration'
 import { AppError } from '../errors'
 import { hashContent, readOptionalText, writeTextAtomic } from '../utils/files'
 import type { AppDatabase } from '../database'
+import { CopilotProviderStore } from '../providers/copilot'
 
 interface ConfigurationArchive extends ConfigurationBackupSummary {
   files: Record<string, string | null>
@@ -105,6 +106,7 @@ export class ConfigurationArchiveStore {
   capturePortableSync(): Record<string, string | null> {
     return this.database.readTransaction(() => ({
       'providers.json': `${JSON.stringify({ providers: this.database.readProviders() }, null, 2)}\n`,
+      'copilot-providers.json': `${JSON.stringify(new CopilotProviderStore(this.database).list(), null, 2)}\n`,
       ...Object.fromEntries(
         PROVIDER_TOOL_IDS.map((id) => [
           `${id}.common.json`,

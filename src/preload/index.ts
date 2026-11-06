@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import { COPILOT_CHANNELS } from '@shared/copilot'
 import {
   APPLICATION_TASK_CHANGED,
   APPLICATION_DETECTED,
@@ -11,6 +12,21 @@ import {
 } from '@shared/ipc'
 
 const api: DesktopApi = {
+  copilot: {
+    snapshot: () => ipcRenderer.invoke(COPILOT_CHANNELS.snapshot),
+    getProvider: (input) => ipcRenderer.invoke(COPILOT_CHANNELS.getProvider, input),
+    saveProvider: (input) => ipcRenderer.invoke(COPILOT_CHANNELS.saveProvider, input),
+    deleteProvider: (input) => ipcRenderer.invoke(COPILOT_CHANNELS.deleteProvider, input),
+    setProviderOrder: (input) => ipcRenderer.invoke(COPILOT_CHANNELS.setProviderOrder, input),
+    setPath: (input) => ipcRenderer.invoke(COPILOT_CHANNELS.setPath, input),
+    pickPath: () => ipcRenderer.invoke(COPILOT_CHANNELS.pickPath),
+    openLocation: (input) => ipcRenderer.invoke(COPILOT_CHANNELS.openLocation, input),
+    apply: (input) => ipcRenderer.invoke(COPILOT_CHANNELS.apply, input),
+    cleanup: (input) => ipcRenderer.invoke(COPILOT_CHANNELS.cleanup, input),
+    previewCleanup: () => ipcRenderer.invoke(COPILOT_CHANNELS.previewCleanup),
+    disable: (input) => ipcRenderer.invoke(COPILOT_CHANNELS.disable, input),
+    restore: (input) => ipcRenderer.invoke(COPILOT_CHANNELS.restore, input)
+  },
   getBootstrap: () => ipcRenderer.invoke(IPC_CHANNELS.getBootstrap),
   getToolStatus: (input) => ipcRenderer.invoke(IPC_CHANNELS.getToolStatus, input),
   getApplications: (input) => ipcRenderer.invoke(IPC_CHANNELS.getApplications, input),
@@ -76,6 +92,8 @@ const api: DesktopApi = {
   migrateCommonConfig: (input) => ipcRenderer.invoke(IPC_CHANNELS.migrateCommonConfig, input),
   previewConfig: (input) => ipcRenderer.invoke(IPC_CHANNELS.previewConfig, input),
   applyProvider: (input) => ipcRenderer.invoke(IPC_CHANNELS.applyProvider, input),
+  cleanupCodexProviders: (input) => ipcRenderer.invoke(IPC_CHANNELS.cleanupCodexProviders, input),
+  previewCodexCleanup: (input) => ipcRenderer.invoke(IPC_CHANNELS.previewCodexCleanup, input),
   restoreBackup: (input) => ipcRenderer.invoke(IPC_CHANNELS.restoreBackup, input)
 }
 

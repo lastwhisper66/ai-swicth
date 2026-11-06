@@ -28,6 +28,8 @@ import { ApplicationManagementService } from './services/application-management'
 import { WslRuntime } from './services/wsl-runtime'
 import icon from '../../resources/icon.png?asset'
 import windowsIcon from '../../resources/icon.ico?asset'
+import { CopilotService } from './services/copilot'
+import { registerCopilotIpc } from './copilot-ipc'
 
 if (is.dev && process.env.AI_SWITCH_USER_DATA_DIR) {
   app.setPath('userData', resolve(process.env.AI_SWITCH_USER_DATA_DIR))
@@ -256,7 +258,9 @@ app.whenReady().then(async () => {
     applications
   )
   const unregisterIpc = registerAppIpc(rendererUrl, controller)
+  const unregisterCopilot = registerCopilotIpc(rendererUrl, new CopilotService(database, targets))
   app.once('will-quit', unregisterIpc)
+  app.once('will-quit', unregisterCopilot)
 
   createTray()
   isInitialized = true

@@ -11,14 +11,14 @@ import { cn } from '@renderer/lib/utils'
 import { moveItem } from '@renderer/lib/sort-order'
 
 interface AppSidebarProps {
-  view: ToolId | 'settings' | 'applications'
+  view: ToolId | 'settings' | 'applications' | 'copilot'
   preferences: ApplicationPreferences
   ready: boolean
   busy: boolean
   collapseSaving: boolean
   onCollapsedChange: (collapsed: boolean) => void
   onOrderChange: (order: ApplicationId[]) => Promise<boolean>
-  onViewChange: (view: ToolId | 'settings' | 'applications') => void
+  onViewChange: (view: ToolId | 'settings' | 'applications' | 'copilot') => void
 }
 
 export function AppSidebar({
@@ -204,6 +204,13 @@ export function AppSidebar({
             </p>
           )
         )}
+        <div className="mt-1 flex p-0.5">
+          {navigationButton(
+            'copilot',
+            'VS Code Copilot',
+            <ToolIcon toolId="copilot" className="size-5" />
+          )}
+        </div>
       </nav>
 
       <nav

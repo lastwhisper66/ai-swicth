@@ -1,5 +1,8 @@
 import { stringify } from 'smol-toml'
+import { isDeepStrictEqual } from 'node:util'
 import { TOOL_NAMES } from '@shared/ipc'
+import type { ProviderCleanupEntry } from '@shared/provider-cleanup'
+import { redactCleanupValue } from '../utils/cleanup-preview'
 import {
   CODEX_COMMON_PATHS,
   CODEX_CONTEXT_WINDOW,
@@ -134,4 +137,72 @@ export class CodexAdapter implements ToolAdapter {
 }
 function getProviderTable(providerId: string): string {
   return `ai-switch-${providerId}`
+}
+
+/** Keep active connections and profile references usable while removing unmanaged tables. */
+export function cleanupCodexProviders(
+  content: string,
+  providerIds: string[],
+  profileContents: Record<string, string | null>
+): {
+  content: string
+  removedCount: number
+  referencedCount: number
+  entries: ProviderCleanupEntry[]
+} {
+  const root = validateCodexToml(content)
+  const referenced = new Set<string>()
+  const profiles = Object.entries(profileContents).map(([path, text]) => {
+    try {
+      return validateCodexToml(text ?? '')
+    } catch {
+      throw new AppError('MALFORMED_CONFIG', `Codex Profile 文件无法解析，请修复后再清理：${path}`)
+    }
+  })
+  for (const document of [root, ...profiles]) {
+    if (document.profiles !== undefined && !isObject(document.profiles))
+      throw new AppError('MALFORMED_CONFIG', 'Codex 的 profiles 必须是表，请修复配置后再清理。')
+    for (const settings of [document, ...Object.values(document.profiles ?? {})]) {
+      if (
+        !isObject(settings) ||
+        (settings.model_provider !== undefined && typeof settings.model_provider !== 'string')
+      )
+        throw new AppError('MALFORMED_CONFIG', 'Codex 的供应商引用无效，请修复配置后再清理。')
+      if (typeof settings.model_provider === 'string') referenced.add(settings.model_provider)
+    }
+  }
+  if (root.model_providers === undefined)
+    return { content, removedCount: 0, referencedCount: 0, entries: [] }
+  if (
+    !isObject(root.model_providers) ||
+    Object.values(root.model_providers).some((provider) => !isObject(provider))
+  )
+    throw new AppError(
+      'MALFORMED_CONFIG',
+      'Codex 的 model_providers 必须由供应商表组成，请修复后再清理。'
+    )
+  const managed = new Set(providerIds.map(getProviderTable))
+  const removed = Object.keys(root.model_providers).filter(
+    (name) => !managed.has(name) && !referenced.has(name)
+  )
+  const referencedCount = Object.keys(root.model_providers).filter(
+    (name) => !managed.has(name) && referenced.has(name)
+  ).length
+  if (!removed.length) return { content, removedCount: 0, referencedCount, entries: [] }
+  const entries = removed.map((name) => {
+    const definition = redactCleanupValue(
+      (root.model_providers as ConfigObject)[name]
+    ) as ConfigObject
+    return {
+      label: typeof definition.name === 'string' ? definition.name : name,
+      location: `model_providers.${JSON.stringify(name)}`,
+      content: stringify({ model_providers: { [name]: definition } })
+    }
+  })
+  for (const name of removed) delete root.model_providers[name]
+  if (!Object.keys(root.model_providers).length) delete root.model_providers
+  const next = stringify(root)
+  if (!isDeepStrictEqual(validateCodexToml(next), root))
+    throw new AppError('WRITE_FAILED', 'Codex 清理结果校验失败，原文件未修改。')
+  return { content: next, removedCount: removed.length, referencedCount, entries }
 }

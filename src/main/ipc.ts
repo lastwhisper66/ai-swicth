@@ -22,6 +22,7 @@ import {
   type CloudBackupOperationInput,
   type CloudBackupSettingsInput,
   type ApplyProviderInput,
+  type CleanupCodexProvidersInput,
   type CreateProviderInput,
   type CommonConfigInput,
   type MigrateCommonConfigInput,
@@ -42,8 +43,6 @@ import {
 import type { HeaderInput, ProviderConfigurations } from '@shared/configuration'
 import { AppError, toApiError } from './errors'
 import type { AppController } from './services/app-controller'
-
-type BusinessChannel = Exclude<(typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS], 'app:get-info'>
 
 export function registerAppIpc(rendererUrl: string, controller: AppController): () => void {
   ipcMain.handle(IPC_CHANNELS.getAppInfo, (event, ...args: unknown[]): AppInfo => {
@@ -277,6 +276,27 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
   registerBusinessHandler(IPC_CHANNELS.applyProvider, rendererUrl, parseApplyProvider, (input) =>
     controller.applyProvider(input)
   )
+  registerBusinessHandler(
+    IPC_CHANNELS.cleanupCodexProviders,
+    rendererUrl,
+    (args): CleanupCodexProvidersInput => {
+      const { toolId, revision } = expectRecordArgument(args)
+      if (toolId !== 'codex' && toolId !== 'codex-wsl') throw invalidRequest()
+      if (typeof revision !== 'string' || !/^[a-f0-9]{64}$/u.test(revision)) throw invalidRequest()
+      return { toolId, revision }
+    },
+    (input) => controller.cleanupCodexProviders(input)
+  )
+  registerBusinessHandler(
+    IPC_CHANNELS.previewCodexCleanup,
+    rendererUrl,
+    (args): Pick<CleanupCodexProvidersInput, 'toolId'> => {
+      const { toolId } = expectRecordArgument(args)
+      if (toolId !== 'codex' && toolId !== 'codex-wsl') throw invalidRequest()
+      return { toolId }
+    },
+    (input) => controller.previewCodexCleanup(input)
+  )
   registerBusinessHandler(IPC_CHANNELS.restoreBackup, rendererUrl, parseRestoreBackup, (input) =>
     controller.restoreBackup(input)
   )
@@ -306,8 +326,8 @@ export function registerAppIpc(rendererUrl: string, controller: AppController): 
   }
 }
 
-function registerBusinessHandler<TInput, TResult>(
-  channel: BusinessChannel,
+export function registerBusinessHandler<TInput, TResult>(
+  channel: string,
   rendererUrl: string,
   parseInput: (args: unknown[]) => TInput,
   operation: (input: TInput, event: IpcMainInvokeEvent) => Promise<TResult>

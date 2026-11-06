@@ -1,4 +1,5 @@
 import { app } from 'electron'
+import type { ProviderCleanupPreview } from '@shared/provider-cleanup'
 import type {
   AppSnapshot,
   AppBootstrap,
@@ -14,6 +15,8 @@ import type {
   CloudBackupSummary,
   ApplyProviderInput,
   ApplyResult,
+  CleanupCodexProvidersInput,
+  CleanupCodexProvidersResult,
   CreateProviderInput,
   CommonConfigInput,
   CommonConfig,
@@ -267,6 +270,21 @@ export class AppController {
       const operation = await this.switchService.restore(input.backupId)
       return { operation, snapshot: await this.getSnapshot() }
     })
+  }
+
+  async cleanupCodexProviders(
+    input: CleanupCodexProvidersInput
+  ): Promise<OperationResponse<CleanupCodexProvidersResult>> {
+    return this.withMutation(async () => {
+      const operation = await this.switchService.cleanupCodexProviders(input.toolId, input.revision)
+      return { operation, snapshot: await this.getSnapshot() }
+    })
+  }
+
+  async previewCodexCleanup(
+    input: Pick<CleanupCodexProvidersInput, 'toolId'>
+  ): Promise<ProviderCleanupPreview> {
+    return this.withMutation(() => this.switchService.previewCodexCleanup(input.toolId))
   }
 
   async getCommonConfig(input: CommonConfigInput): Promise<CommonConfig> {

@@ -27,6 +27,8 @@ import type { AppDatabase } from '../database'
 import type { AppSettingsStore } from './app-settings'
 import type { CommonConfigStore } from './common-config'
 import type { ConfigurationArchiveStore } from './configuration-archives'
+import type { CopilotProvider } from '@shared/copilot'
+import { CopilotProviderStore, validatePortableCopilot } from '../providers/copilot'
 
 const CURRENT_OBJECT_NAME = 'backup.json.enc'
 const LEGACY_OBJECT_NAME = 'backup.v1.json.enc'
@@ -34,6 +36,7 @@ const LEGACY_OBJECT_NAME = 'backup.v1.json.enc'
 interface CloudBackupDocument {
   createdAt: string
   providers: PortableProvider[]
+  copilotProviders?: CopilotProvider[]
   commonConfigs: Record<ProviderToolId, string | null>
 }
 interface EncryptedEnvelope {
@@ -108,12 +111,14 @@ export class CloudBackupService {
     try {
       const snapshot = this.database.readTransaction(() => ({
         common: this.commonConfigs.exportPortableSync(),
-        providers: this.providerStore.exportPortableSync()
+        providers: this.providerStore.exportPortableSync(),
+        copilotProviders: new CopilotProviderStore(this.database).list()
       }))
       const common = snapshot.common
       const document: CloudBackupDocument = {
         createdAt: new Date().toISOString(),
         providers: snapshot.providers,
+        copilotProviders: snapshot.copilotProviders,
         commonConfigs: Object.fromEntries(
           PROVIDER_TOOL_IDS.map((id) => [id, common[id]])
         ) as CloudBackupDocument['commonConfigs']
@@ -162,7 +167,7 @@ export class CloudBackupService {
       return {
         objectKey,
         createdAt: document.createdAt,
-        providerCount: document.providers.length,
+        providerCount: document.providers.length + (document.copilotProviders?.length ?? 0),
         commonConfigCount: PROVIDER_TOOL_IDS.filter((id) => common[id] !== null).length,
         message: '已用本地完整配置覆盖云端当前存档，API Key 已随文件加密保存。',
         warnings
@@ -206,7 +211,7 @@ export class CloudBackupService {
       return {
         objectKey,
         createdAt: document.createdAt,
-        providerCount: document.providers.length,
+        providerCount: document.providers.length + (document.copilotProviders?.length ?? 0),
         commonConfigCount: PROVIDER_TOOL_IDS.filter((id) => document.commonConfigs[id] !== null)
           .length,
         message: '已用云端存档完整覆盖本地供应商和通用配置，本地变更未合并；请手动应用到工具。',
@@ -244,10 +249,18 @@ export class CloudBackupService {
         return [id, this.commonConfigs.decode(archive.files[name])]
       })
     ) as CloudBackupDocument['commonConfigs']
+    let copilotProviders: unknown
+    try {
+      const text = archive.files['copilot-providers.json']
+      copilotProviders = text === undefined ? undefined : JSON.parse(text ?? '[]')
+    } catch {
+      throw new AppError('STORAGE_CORRUPTED', '本机配置快照中的 Copilot 供应商无法解析。')
+    }
     await this.applyDocument(
       this.validateDocument({
         createdAt: archive.createdAt,
         providers: parsed.providers,
+        copilotProviders,
         commonConfigs
       }),
       'restore'
@@ -272,6 +285,9 @@ export class CloudBackupService {
       return {
         createdAt: value.createdAt,
         providers,
+        ...(value.copilotProviders === undefined
+          ? {}
+          : { copilotProviders: validatePortableCopilot(value.copilotProviders) }),
         commonConfigs: Object.fromEntries(
           PROVIDER_TOOL_IDS.map((id) => [id, common[id]])
         ) as CloudBackupDocument['commonConfigs']
@@ -295,6 +311,9 @@ export class CloudBackupService {
         )
       this.archives.register(backup)
       this.providerStore.replacePortable(document.providers)
+      // Older archives have no BYOK field: preserve the user's newer Copilot records.
+      if (document.copilotProviders !== undefined)
+        new CopilotProviderStore(this.database).replace(document.copilotProviders)
       this.commonConfigs.replacePortable(document.commonConfigs)
     })
   }

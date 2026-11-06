@@ -1,5 +1,7 @@
 import type { ProviderConfigurations, HeaderInput, HeaderValue } from './configuration'
 import type { ApplicationId } from './applications'
+import type { CopilotApi } from './copilot'
+import type { ProviderCleanupPreview } from './provider-cleanup'
 
 export const IPC_CHANNELS = {
   getAppInfo: 'app:get-info',
@@ -43,6 +45,8 @@ export const IPC_CHANNELS = {
   migrateCommonConfig: 'config:migrate-common',
   previewConfig: 'config:preview',
   applyProvider: 'switch:apply',
+  cleanupCodexProviders: 'switch:cleanup-codex-providers',
+  previewCodexCleanup: 'switch:preview-codex-cleanup',
   restoreBackup: 'backups:restore'
 } as const
 
@@ -314,7 +318,7 @@ export interface ToolStatus {
   model: string | null
 }
 
-export type BackupReason = 'apply' | 'restore' | 'common' | 'template'
+export type BackupReason = 'apply' | 'restore' | 'common' | 'template' | 'cleanup'
 
 export interface CommonConfigInput {
   toolId: ToolId
@@ -402,6 +406,19 @@ export interface ApplyResult {
 
 export interface RestoreBackupInput {
   backupId: string
+}
+
+export interface CleanupCodexProvidersInput {
+  toolId: 'codex' | 'codex-wsl'
+  revision: string
+}
+
+export interface CleanupCodexProvidersResult {
+  toolId: 'codex' | 'codex-wsl'
+  backupId: string | null
+  removedCount: number
+  message: string
+  warnings: string[]
 }
 
 export interface RestoreResult {
@@ -497,6 +514,7 @@ export interface ApiError {
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: ApiError }
 
 export interface DesktopApi {
+  copilot: CopilotApi
   getBootstrap: () => Promise<ApiResult<AppBootstrap>>
   getToolStatus: (input: { toolId: ToolId }) => Promise<ApiResult<ToolStatus>>
   getApplications: (input: DetectApplicationsInput) => Promise<ApiResult<ApplicationListSnapshot>>
@@ -557,5 +575,11 @@ export interface DesktopApi {
   migrateCommonConfig: (input: MigrateCommonConfigInput) => Promise<ApiResult<AppSnapshot>>
   previewConfig: (input: PreviewConfigInput) => Promise<ApiResult<ConfigPreview>>
   applyProvider: (input: ApplyProviderInput) => Promise<ApiResult<OperationResponse<ApplyResult>>>
+  cleanupCodexProviders: (
+    input: CleanupCodexProvidersInput
+  ) => Promise<ApiResult<OperationResponse<CleanupCodexProvidersResult>>>
+  previewCodexCleanup: (
+    input: Pick<CleanupCodexProvidersInput, 'toolId'>
+  ) => Promise<ApiResult<ProviderCleanupPreview>>
   restoreBackup: (input: RestoreBackupInput) => Promise<ApiResult<OperationResponse<RestoreResult>>>
 }
