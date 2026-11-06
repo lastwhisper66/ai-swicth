@@ -52,6 +52,7 @@ export interface SessionDetail {
   session: SessionSummary
   messages: SessionMessage[]
   totalMessages: number
+  /** Zero-based position of the first message in this page or accumulated range. */
   offset: number
   warnings: string[]
 }

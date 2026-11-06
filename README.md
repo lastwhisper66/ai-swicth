@@ -40,9 +40,9 @@ Codex 和 Codex WSL 首页提供“清理未管理供应商”，点击后先弹
 
 侧边栏底部的“会话”入口集中浏览 Claude Code、Codex 和 **Copilot CLI** 已有的本地会话。顶部直接切换工具，Claude Code 和 Codex 另有本机 / WSL 环境选择；会话目录可独立更换、恢复默认，不会修改供应商配置目录。
 
-- 默认按项目分组，也可按更新时间排序；支持项目筛选、最近 24 小时 / 7 天 / 30 天筛选和列表分页。
+- 默认按项目分组，也可按更新时间排序；支持项目筛选（包括单独筛选未记录项目的会话）、最近 24 小时 / 7 天 / 30 天筛选和列表分页。
 - 搜索范围可选标题、消息内容、会话 ID 或全部。消息全文由主进程按需读取，不上传、调用模型或创建会话；首次全文搜索大量历史可能较慢，改变条件后停止旧检索。单个日志超过 128 MiB 或 250,000 个事件时提示使用原工具查看，并明确提示未完整检索。
-- 点击会话在右侧以只读对话展示提问和回答，支持 Markdown、代码块、表格、消息复制和分页加载；工具调用、执行结果、系统记录默认折叠。图片显示附件占位，不读取外部图片；不执行记录中的 HTML 或链接。
+- 点击会话在右侧以只读对话展示提问和回答，支持 Markdown、代码块、表格、消息复制和连续分页加载；搜索定位到中间消息时，可补载之前和之后的消息，并显示当前已加载区间。工具调用、执行结果、系统记录默认折叠。图片显示附件占位，不读取外部图片；不执行记录中的 HTML 或链接。
 - 支持单个、跨列表分页选择和批量删除，每次主动选择上限 500 个。删除预览列出完整会话及已发现的 Codex 派生子会话；确认后永久移除，不提供消息级删除、回收站或 Markdown 导出，不自动创建会话备份。预览过期、会话变化或新增派生会话时要求重新确认。批量操作分别报告成功、失败和关联记录未清理的情况。
 - Claude 删除会话正文、对应子代理 / 工具结果目录及会话专用附件、文件历史等，清理旧项目索引和输入历史中匹配的会话记录；保留项目代码、项目记忆及工具配置。Codex、Copilot CLI 使用原工具的删除接口，避免直接修改其 SQLite 数据库。Codex 删除接口会级联删除派生子会话，预览包含关联范围；Copilot CLI 仅处理本地会话，远端副本由原工具或 GitHub 管理。
 - 删除前检查文件是否变化、最近是否仍在写入，以及可用的运行标记 / 工具状态。其他进程可能继续写入，因此删除前应关闭原工具中打开的目标会话。操作期间不允许退出应用。
@@ -59,6 +59,10 @@ Codex 和 Codex WSL 首页提供“清理未管理供应商”，点击后先弹
 Claude / Codex 会话只检查默认数据根目录及工具已经配置的数据根目录，重复路径会去重；WSL 也遵循这两个检查点。Copilot CLI 同样合并默认目录与 `COPILOT_HOME`。VS Code Copilot 只检查默认 User 数据根目录及应用已保存的 VS Code 配置所在根目录。Codex 和 Copilot CLI 未安装、版本不支持会话接口或接口不可用时，仍可浏览可识别的本地日志，但禁止删除。VS Code 删除前要求退出所有 VS Code 窗口，避免编辑器缓存重新写回。
 
 实现位于 [`src/main/sessions/`](src/main/sessions/README.md)、[`src/shared/sessions.ts`](src/shared/sessions.ts) 和界面的 `SessionsPage` / `SessionConversation`。读取、检索、路径检查、删除计划与 CLI 通信都在主进程，IPC 只接受校验后的查询、会话键及短期确认令牌，不接受任意文件删除路径。内容仅暂存在有数量和容量限制的内存缓存，不复制进应用数据库或云端备份。
+
+全选请求期间改变工具、搜索或筛选条件后，旧请求的结果会失效；请求未完成时暂停修改选择和删除。macOS / Linux 删除 VS Code 会话前按 VS Code 可执行名称或应用包路径检查进程；Linux 另读取系统 Electron 的启动参数，识别发行版 Code OSS 的入口脚本。排除本应用进程，不将其他 Electron 应用当作 VS Code；进程退出时跳过，无法读取启动参数时阻止删除并提示检查权限。
+
+2026-11-06 会话修复验证：使用独立应用数据与临时虚构记录，通过开发者控制台操作界面，确认 350 条 Claude 记录连续加载到末尾、搜索定位后的前后补载与显示区间、纯图片消息占位；VS Code 无项目筛选和全选均仅包含无项目会话，改变搜索条件后旧全选结果未覆盖选择状态。格式、ESLint、类型检查和生产构建通过；未添加测试代码、未操作真实会话，macOS / Linux 进程识别尚待对应系统实机验证。
 
 官方依据：[Claude 会话](https://code.claude.com/docs/en/sessions)、[Claude 数据目录](https://code.claude.com/docs/en/claude-directory)、[Codex App Server](https://learn.chatgpt.com/docs/app-server)、[Codex 数据根目录](https://learn.chatgpt.com/docs/config-file/config-advanced)、[Copilot CLI 配置目录](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference)、[Copilot SDK](https://github.com/github/copilot-sdk)、[VS Code 会话历史](https://code.visualstudio.com/docs/agents/run/sessions/session-history)及 [VS Code ChatSessionStore 源码](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/chat/common/model/chatSessionStore.ts)。Codex 参数另按本机 `codex-cli 0.166.0` 生成的 JSON Schema 核对，包括所有会话来源和供应商的枚举范围。
 

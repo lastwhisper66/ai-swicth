@@ -18,6 +18,7 @@ export function SessionConversation({
   loading,
   error,
   busy,
+  onLoadPrevious,
   onLoadMore,
   onDelete,
   onPrevious,
@@ -30,6 +31,7 @@ export function SessionConversation({
   loading: boolean
   error: string | null
   busy: boolean
+  onLoadPrevious: () => void
   onLoadMore: () => void
   onDelete: () => void
   onPrevious?: () => void
@@ -142,6 +144,13 @@ export function SessionConversation({
             <AlertDescription>{warning}</AlertDescription>
           </Alert>
         ))}
+        {detail.offset > 0 && (
+          <div className="flex justify-center">
+            <Button variant="outline" onClick={onLoadPrevious} disabled={loading || busy}>
+              {loading && <Spinner />}加载之前消息
+            </Button>
+          </div>
+        )}
         {detail.messages.map((message) => (
           <ConversationMessage key={message.id} message={message} search={search} />
         ))}
@@ -150,17 +159,19 @@ export function SessionConversation({
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
-        {detail.messages.length < detail.totalMessages && (
+        {detail.offset + detail.messages.length < detail.totalMessages && (
           <div className="flex justify-center">
             <Button variant="outline" onClick={onLoadMore} disabled={loading || busy}>
-              {loading && <Spinner />}加载后续消息（已显示 {detail.messages.length} /{' '}
-              {detail.totalMessages}）
+              {loading && <Spinner />}加载后续消息
             </Button>
           </div>
         )}
       </div>
       <footer className="shrink-0 border-t px-4 py-2 text-[11px] text-muted-foreground">
-        只读对话 · 共 {detail.totalMessages} 条记录 · 工具调用与结果可展开查看
+        只读对话 · 共 {detail.totalMessages} 条记录
+        {detail.messages.length > 0 &&
+          ` · 已显示 ${detail.offset + 1}–${detail.offset + detail.messages.length} 条`}
+        {' · '}工具调用与结果可展开查看
       </footer>
     </section>
   )

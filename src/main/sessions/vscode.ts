@@ -355,16 +355,14 @@ export async function assertVsCodeClosed(): Promise<void> {
             timeout: 10_000,
             maxBuffer: 4 * 1024 * 1024
           })
-        : await runFile('ps', ['-A', '-o', 'comm='], {
+        : await runFile('ps', ['-A', '-ww', '-o', 'pid=,comm='], {
             timeout: 10_000,
             maxBuffer: 4 * 1024 * 1024
           })
     if (
       process.platform === 'win32'
         ? /^"(?:Code|Code - Insiders|Code - OSS)\.exe"/imu.test(result.stdout)
-        : /(?:^|\/)(?:code|code-insiders|code-oss|Electron|Code Helper(?: \([^)]+\))?)$/imu.test(
-            result.stdout
-          )
+        : await hasVsCodeProcess(result.stdout)
     )
       throw new AppError(
         'CONCURRENT_MODIFICATION',
@@ -374,6 +372,39 @@ export async function assertVsCodeClosed(): Promise<void> {
     if (error instanceof AppError) throw error
     throw new AppError('UNKNOWN', '无法确认 VS Code 已关闭，未执行删除。请检查进程访问权限后重试。')
   }
+}
+
+async function hasVsCodeProcess(output: string): Promise<boolean> {
+  for (const line of output.split('\n')) {
+    const match = /^\s*(\d+)\s+(.+?)\s*$/u.exec(line)
+    if (!match || Number(match[1]) === process.pid) continue
+    const executable = match[2]
+    if (
+      /(?:^|\/)(?:code|code-insiders|code-oss)$/iu.test(executable) ||
+      /\/(?:Visual Studio Code(?: - Insiders)?|Code - OSS)\.app\/Contents\//u.test(executable)
+    )
+      return true
+    if (process.platform !== 'linux' || !/(?:^|\/)electron(?:[.-]?\d+)?$/iu.test(executable))
+      continue
+    // Distro packages can run Code OSS on a shared Electron executable.
+    // Read NUL-delimited argv so paths with spaces keep their argument boundaries.
+    let args: string[]
+    try {
+      args = (await readFile(`/proc/${match[1]}/cmdline`, 'utf8')).split('\0')
+    } catch (error) {
+      if (missing(error)) continue // The process exited after the ps snapshot.
+      throw error
+    }
+    const entryPoint = args.slice(1).find((argument) => argument && !argument.startsWith('-'))
+    if (
+      entryPoint &&
+      /\/(?:code|code-insiders|code-oss)\/(?:code\.js|out\/(?:main|cli)\.js|resources\/app(?:\/out\/(?:main|cli)\.js)?)$/iu.test(
+        entryPoint
+      )
+    )
+      return true
+  }
+  return false
 }
 
 export async function removeVsCodeSession(

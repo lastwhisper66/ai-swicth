@@ -166,7 +166,7 @@ export class SessionService {
     const warnings = [...catalog.warnings]
     let entries = catalog.entries.filter(
       (entry) =>
-        (!query.project || entry.project === query.project) &&
+        (query.project === undefined || entry.project === query.project) &&
         (!query.since || entry.updatedAt >= query.since)
     )
     if (needle) {

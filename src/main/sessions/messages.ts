@@ -142,7 +142,7 @@ export function parseConversation(
           add({
             id: blockId,
             role: role as 'user' | 'assistant',
-            text: typeof raw === 'string' ? cleanText(raw) : text(block.text),
+            text: typeof raw === 'string' ? cleanText(raw) : contentText([block]),
             timestamp
           })
         }

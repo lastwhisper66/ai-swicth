@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -75,9 +75,8 @@ export function SessionsPage({
   const [error, setError] = useState<string | null>(null)
   const [active, setActive] = useState<string | null>(null)
   const activeKey = useRef<string | null>(null)
-  const [readVersion, setReadVersion] = useState(0)
   const [detail, setDetail] = useState<SessionDetail | null>(null)
-  const [messageOffset, setMessageOffset] = useState(0)
+  const [messageRequest, setMessageRequest] = useState({ offset: 0, locateSearch: true })
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [selected, setSelected] = useState(new Map<string, SessionSummary>())
@@ -85,6 +84,7 @@ export function SessionsPage({
   const [deleteResult, setDeleteResult] = useState<SessionDeleteResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [selectingAll, setSelectingAll] = useState(false)
+  const selectAllVersion = useRef(0)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const busyRef = useRef(false)
   const mounted = useRef(true)
@@ -95,14 +95,22 @@ export function SessionsPage({
       mounted.current = false
     }
   }, [])
+  useLayoutEffect(() => {
+    // Invalidate pending selections before responses can reach the newly committed filters.
+    selectAllVersion.current++
+  }, [sourceId, search, appliedSearch, scope, groupBy, project, period, refresh])
   useEffect(() => {
+    const nextSearch = search.trim()
+    if (nextSearch === appliedSearch) return
     const timer = window.setTimeout(() => {
-      setAppliedSearch(search.trim())
+      setAppliedSearch(nextSearch)
       setOffset(0)
       setSelected(new Map())
+      setDetail(null)
+      setMessageRequest({ offset: 0, locateSearch: true })
     }, 400)
     return () => window.clearTimeout(timer)
-  }, [search])
+  }, [search, appliedSearch])
   useEffect(() => {
     let current = true
     void Promise.resolve().then(() => {
@@ -143,8 +151,7 @@ export function SessionsPage({
           setDetail(null)
         } else if (forceRefresh) {
           setDetail(null)
-          setMessageOffset(0)
-          setReadVersion((value) => value + 1)
+          setMessageRequest({ offset: 0, locateSearch: true })
         }
       })
       .catch(() => {
@@ -172,8 +179,8 @@ export function SessionsPage({
     void window.api.sessions
       .read({
         key: active,
-        offset: messageOffset,
-        search: messageOffset === 0 ? appliedSearch : undefined
+        offset: messageRequest.offset,
+        search: messageRequest.locateSearch ? appliedSearch : undefined
       })
       .then((response) => {
         if (!current) return
@@ -181,12 +188,24 @@ export function SessionsPage({
           setDetailError(response.error.message)
           return
         }
-        setMessageOffset(response.value.offset)
-        setDetail((previous) =>
-          previous?.session.key === active && previous.offset !== response.value.offset
-            ? { ...response.value, messages: [...previous.messages, ...response.value.messages] }
-            : response.value
-        )
+        setDetail((previous) => {
+          const page = response.value
+          if (
+            messageRequest.locateSearch ||
+            previous?.session.key !== active ||
+            previous.session.revision !== page.session.revision
+          )
+            return page
+          if (page.offset === previous.offset + previous.messages.length)
+            return {
+              ...page,
+              offset: previous.offset,
+              messages: [...previous.messages, ...page.messages]
+            }
+          if (page.offset + page.messages.length === previous.offset)
+            return { ...page, messages: [...page.messages, ...previous.messages] }
+          return page
+        })
       })
       .catch(() => {
         if (current) setDetailError('无法读取此会话，请刷新后重试。')
@@ -197,7 +216,7 @@ export function SessionsPage({
     return () => {
       current = false
     }
-  }, [active, messageOffset, readVersion, appliedSearch])
+  }, [active, messageRequest, appliedSearch])
 
   function resetFilter(): void {
     activeKey.current = null
@@ -211,7 +230,7 @@ export function SessionsPage({
     if (busy || active === entry.key) return
     setDetail(null)
     setDetailError(null)
-    setMessageOffset(0)
+    setMessageRequest({ offset: 0, locateSearch: true })
     activeKey.current = entry.key
     setActive(entry.key)
   }
@@ -292,7 +311,9 @@ export function SessionsPage({
     }
   }
   async function selectAllMatching(): Promise<void> {
-    if (busyRef.current || selectingAll) return
+    if (busyRef.current || selectingAll || loading || search.trim() !== appliedSearch) return
+    const version = ++selectAllVersion.current
+    const isCurrent = (): boolean => mounted.current && version === selectAllVersion.current
     setSelectingAll(true)
     try {
       const since =
@@ -309,6 +330,7 @@ export function SessionsPage({
         offset: 0,
         limit: 100
       })
+      if (!isCurrent()) return
       if (!response.ok) {
         toast.error(response.error.message)
         return
@@ -316,9 +338,9 @@ export function SessionsPage({
       setSelected(new Map(response.value.map((entry) => [entry.key, entry])))
       toast.success(`已选择当前筛选条件下的 ${response.value.length} 个会话`)
     } catch {
-      toast.error('无法全选会话，请刷新后重试。')
+      if (isCurrent()) toast.error('无法全选会话，请刷新后重试。')
     } finally {
-      setSelectingAll(false)
+      if (mounted.current) setSelectingAll(false)
     }
   }
 
@@ -509,7 +531,7 @@ export function SessionsPage({
             <label className="flex cursor-pointer items-center gap-2 text-xs">
               <Checkbox
                 aria-label="选择本页会话"
-                disabled={busy || loading || !sessions.length}
+                disabled={busy || selectingAll || loading || !sessions.length}
                 checked={
                   pageSelected
                     ? true
@@ -535,7 +557,13 @@ export function SessionsPage({
                 size="sm"
                 variant="ghost"
                 className="h-7 text-xs"
-                disabled={busy || loading || !sessions.length || selectingAll}
+                disabled={
+                  busy ||
+                  loading ||
+                  !sessions.length ||
+                  selectingAll ||
+                  search.trim() !== appliedSearch
+                }
                 onClick={() => void selectAllMatching()}
               >
                 {selectingAll && <Spinner />}
@@ -546,7 +574,7 @@ export function SessionsPage({
                   size="sm"
                   variant="ghost"
                   className="h-7 text-xs"
-                  disabled={busy}
+                  disabled={busy || selectingAll}
                   onClick={() => setSelected(new Map())}
                 >
                   清空
@@ -556,7 +584,7 @@ export function SessionsPage({
                 size="sm"
                 variant="ghost"
                 className="h-7 text-xs text-destructive"
-                disabled={busy || !selected.size || loading}
+                disabled={busy || selectingAll || !selected.size || loading}
                 onClick={() => void prepareDelete([...selected.values()])}
               >
                 {busy ? <Spinner /> : <Trash2 />}删除{selected.size > 0 && `（${selected.size}）`}
@@ -619,7 +647,7 @@ export function SessionsPage({
                       <Checkbox
                         className="mt-1"
                         aria-label={`选择会话：${entry.title}`}
-                        disabled={busy}
+                        disabled={busy || selectingAll}
                         checked={selected.has(entry.key)}
                         onCheckedChange={() => toggleSelected(entry)}
                       />
@@ -689,10 +717,17 @@ export function SessionsPage({
           search={appliedSearch}
           loading={detailLoading}
           error={detailError}
-          busy={busy}
+          busy={busy || selectingAll}
+          onLoadPrevious={() => {
+            if (detail)
+              setMessageRequest({ offset: Math.max(0, detail.offset - 100), locateSearch: false })
+          }}
           onLoadMore={() => {
-            setMessageOffset((detail?.offset ?? 0) + (detail?.messages.length ?? 0))
-            setReadVersion((value) => value + 1)
+            if (detail)
+              setMessageRequest({
+                offset: detail.offset + detail.messages.length,
+                locateSearch: false
+              })
           }}
           onDelete={() => {
             if (detail) void prepareDelete([detail.session])
