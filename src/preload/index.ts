@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { COPILOT_CHANNELS } from '@shared/copilot'
 import { SESSION_CHANNELS } from '@shared/sessions'
+import { USAGE_CHANNELS } from '@shared/usage'
 import {
   APPLICATION_TASK_CHANGED,
   APPLICATION_DETECTED,
@@ -13,6 +14,10 @@ import {
 } from '@shared/ipc'
 
 const api: DesktopApi = {
+  usage: {
+    query: (input) => ipcRenderer.invoke(USAGE_CHANNELS.query, input),
+    savePrices: (input) => ipcRenderer.invoke(USAGE_CHANNELS.savePrices, input)
+  },
   sessions: {
     list: (input) => ipcRenderer.invoke(SESSION_CHANNELS.list, input),
     read: (input) => ipcRenderer.invoke(SESSION_CHANNELS.read, input),

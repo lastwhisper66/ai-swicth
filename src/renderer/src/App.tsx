@@ -26,6 +26,7 @@ import { SettingsPage, type SettingsSection } from '@renderer/components/feature
 import { ToolConfigPage } from '@renderer/components/features/ToolConfigPage'
 import { CopilotPage } from '@renderer/components/features/CopilotPage'
 import { SessionsPage } from '@renderer/components/features/SessionsPage'
+import { UsagePage } from '@renderer/components/features/UsagePage'
 import { ToolFeaturesPage } from '@renderer/components/features/ToolFeaturesPage'
 import type { ToolPageSection } from '@renderer/components/features/ToolPageActions'
 import { Alert, AlertDescription } from '@renderer/components/ui/alert'
@@ -36,7 +37,7 @@ import { useApplications } from '@renderer/hooks/use-applications'
 import { moveItem } from '@renderer/lib/sort-order'
 
 type ProviderEditorState = { provider: ProviderSummary | null; toolId: ToolId } | null
-type MainView = ToolId | 'settings' | 'applications' | 'copilot' | 'sessions'
+type MainView = ToolId | 'settings' | 'applications' | 'copilot' | 'sessions' | 'usage'
 const initialPreferences: ApplicationPreferences = {
   visible: Object.fromEntries(TOOL_IDS.map((id) => [id, true])) as Record<ToolId, boolean>,
   wsl: {},
@@ -85,6 +86,7 @@ function App(): React.JSX.Element {
           current !== 'applications' &&
           current !== 'copilot' &&
           current !== 'sessions' &&
+          current !== 'usage' &&
           !result.applicationPreferences.visible[current]
             ? 'applications'
             : current
@@ -277,6 +279,7 @@ function App(): React.JSX.Element {
         current !== 'applications' &&
         current !== 'copilot' &&
         current !== 'sessions' &&
+        current !== 'usage' &&
         !nextSnapshot.applicationPreferences.visible[current]
           ? 'applications'
           : current
@@ -292,6 +295,7 @@ function App(): React.JSX.Element {
         current !== 'applications' &&
         current !== 'copilot' &&
         current !== 'sessions' &&
+        current !== 'usage' &&
         !result.applicationPreferences.visible[current]
           ? 'applications'
           : current
@@ -589,7 +593,9 @@ function App(): React.JSX.Element {
                   </Button>
                 </Alert>
               )}
-              {view === 'sessions' ? (
+              {view === 'usage' ? (
+                <UsagePage />
+              ) : view === 'sessions' ? (
                 <SessionsPage
                   onBusyChange={(pending) =>
                     setPendingKey((current) =>

@@ -2,6 +2,7 @@ import type { ProviderConfigurations, HeaderInput, HeaderValue } from './configu
 import type { ApplicationId } from './applications'
 import type { CopilotApi } from './copilot'
 import type { SessionsApi } from './sessions'
+import type { UsageApi } from './usage'
 import type { ProviderCleanupPreview } from './provider-cleanup'
 
 export const IPC_CHANNELS = {
@@ -517,6 +518,7 @@ export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: ApiError
 export interface DesktopApi {
   copilot: CopilotApi
   sessions: SessionsApi
+  usage: UsageApi
   getBootstrap: () => Promise<ApiResult<AppBootstrap>>
   getToolStatus: (input: { toolId: ToolId }) => Promise<ApiResult<ToolStatus>>
   getApplications: (input: DetectApplicationsInput) => Promise<ApiResult<ApplicationListSnapshot>>

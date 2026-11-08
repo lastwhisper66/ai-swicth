@@ -32,6 +32,8 @@ import { CopilotService } from './services/copilot'
 import { registerCopilotIpc } from './copilot-ipc'
 import { registerSessionIpc } from './sessions/ipc'
 import { SessionService } from './sessions/service'
+import { UsageService } from './usage/service'
+import { registerUsageIpc } from './usage/ipc'
 
 if (is.dev && process.env.AI_SWITCH_USER_DATA_DIR) {
   app.setPath('userData', resolve(process.env.AI_SWITCH_USER_DATA_DIR))
@@ -272,9 +274,11 @@ app.whenReady().then(async () => {
   const unregisterCopilot = registerCopilotIpc(rendererUrl, new CopilotService(database, targets))
   sessions = new SessionService(database, pathSettings, wslRuntime)
   const unregisterSessions = registerSessionIpc(rendererUrl, sessions)
+  const unregisterUsage = registerUsageIpc(rendererUrl, new UsageService(database, pathSettings))
   app.once('will-quit', unregisterIpc)
   app.once('will-quit', unregisterCopilot)
   app.once('will-quit', unregisterSessions)
+  app.once('will-quit', unregisterUsage)
 
   createTray()
   isInitialized = true
