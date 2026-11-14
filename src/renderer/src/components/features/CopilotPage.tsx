@@ -50,10 +50,12 @@ type Confirmation = {
 
 export function CopilotPage({
   onBusyChange,
+  onSessions,
   busy: externalBusy = false,
   mode: context = 'home'
 }: {
   onBusyChange: (busy: boolean) => void
+  onSessions?: () => void
   busy?: boolean
   mode?: 'home' | 'backups'
 }): React.JSX.Element {
@@ -262,6 +264,7 @@ export function CopilotPage({
                 setSection('home')
               }}
               onAdd={addProvider}
+              onSessions={onSessions}
               onConfigure={() => {
                 setEditor(null)
                 setSection('configuration')

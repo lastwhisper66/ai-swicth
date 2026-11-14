@@ -1,7 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto'
-import { lstat, readFile, rm, stat, unlink } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { lstat } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import {
   SESSION_SOURCE_NAMES,
   type SessionSourceId,
@@ -9,7 +8,6 @@ import {
   type SessionSummary,
   type SessionQuery,
   type SessionList,
-  type SessionMessage,
   type SessionDetail,
   type SessionDeleteItem,
   type SessionDeletePreview,
@@ -20,26 +18,12 @@ import { AppError } from '../errors'
 import type { PathSettingsStore } from '../services/path-settings'
 import type { WslRuntime } from '../services/wsl-runtime'
 import { parseWslPath } from '../services/wsl'
-import { writeTextAtomic } from '../utils/files'
-import { codexThreadMessages, parseConversation, record, text } from './messages'
-import { fingerprint, missing, readEvents, sampleEvents, walk, withinRoot } from './files'
+import { missing, withinRoot } from './files'
 import { NativeSessionRpc, SessionRpcError } from './native-rpc'
-import {
-  defaultVsCodeUserDirectory,
-  scanVsCodeSessions,
-  readVsCodeSession,
-  removeVsCodeSession,
-  assertVsCodeClosed,
-  type VsCodeSessionFiles
-} from './vscode'
+import { createSessionAdapters } from './adapters'
+import { assertUnchanged } from './storage'
+import type { SessionAdapter, SessionContent, SessionEntry as Entry } from './types'
 
-interface Entry extends SessionSummary {
-  source: SessionSource
-  file?: string
-  fileRevision?: string
-  parentId?: string
-  vscode?: VsCodeSessionFiles
-}
 interface Catalog {
   source: SessionSource
   entries: Entry[]
@@ -49,35 +33,20 @@ interface Catalog {
   signature?: string
   unavailableDirectories?: string[]
 }
-interface Conversation {
+interface Conversation extends SessionContent {
   revision: string
-  messages: SessionMessage[]
-  warnings: string[]
 }
 interface DeletePlan {
   entries: Entry[]
   expires: number
+  clearSource?: SessionSourceId
+  sourceSignature?: string
 }
 interface RpcClient {
   pending: Promise<NativeSessionRpc>
   users: number
   timer?: ReturnType<typeof setTimeout>
 }
-
-const sourceKind = (id: SessionSourceId): 'claude' | 'codex' | 'copilot' | 'vscode' =>
-  id.startsWith('claude')
-    ? 'claude'
-    : id.startsWith('codex')
-      ? 'codex'
-      : id === 'copilot-vscode'
-        ? 'vscode'
-        : 'copilot'
-const iso = (value: unknown, fallback: string): string => {
-  const date = new Date(typeof value === 'number' ? value * 1000 : text(value))
-  return Number.isFinite(date.getTime()) ? date.toISOString() : fallback
-}
-const keyFor = (source: SessionSource, id: string): string =>
-  createHash('sha256').update(`${source.id}\0${source.directory}\0${id}`).digest('hex')
 
 export class SessionService {
   private catalogs = new Map<SessionSourceId, Promise<Catalog>>()
@@ -90,11 +59,14 @@ export class SessionService {
   private stopped = false
   private mutations = 0
 
+  private readonly adapters: Record<SessionSourceId, SessionAdapter>
   constructor(
-    private readonly database: AppDatabase,
-    private readonly paths: PathSettingsStore,
+    database: AppDatabase,
+    paths: PathSettingsStore,
     private readonly wsl: WslRuntime
-  ) {}
+  ) {
+    this.adapters = createSessionAdapters({ database, paths, wsl, rpc: this.rpc.bind(this) })
+  }
 
   close(): void {
     this.stopped = true
@@ -120,16 +92,7 @@ export class SessionService {
   }
 
   private async sources(id: SessionSourceId): Promise<SessionSource[]> {
-    let directories: string[]
-    if (id === 'copilot-cli') {
-      directories = [
-        join(homedir(), '.copilot'),
-        resolve(process.env.COPILOT_HOME || join(homedir(), '.copilot'))
-      ]
-    } else if (id === 'copilot-vscode') {
-      const configured = this.database.getSetting<string>('device_settings', 'copilot.path')
-      directories = [defaultVsCodeUserDirectory(), ...(configured ? [dirname(configured)] : [])]
-    } else directories = await this.paths.getSessionDirectories(id)
+    const directories = await this.adapters[id].directories(id)
     const distinct = new Map<string, string>()
     for (const path of directories) {
       const directory = resolve(path)
@@ -264,41 +227,54 @@ export class SessionService {
           'CONCURRENT_MODIFICATION',
           '所选会话已变化或已被删除，请刷新列表后重新选择。'
         )
-      await this.assertIdle(entry)
       entries.push(entry)
     }
     // Include discovered spawned children in the confirmation, never unrelated forks.
     for (const catalog of catalogs.values())
       entries.push(
-        ...descendants(catalog.entries, entries).filter(
+        ...this.related(catalog.entries, entries).filter(
           (e) => !entries.some((old) => old.key === e.key)
         )
       )
-    for (const entry of entries) await this.assertIdle(entry)
+    return this.createDeletePlan(entries)
+  }
+
+  async previewClear(sourceId: SessionSourceId): Promise<SessionDeletePreview> {
+    const catalog = await this.catalog(sourceId, true, true)
+    this.requireCompleteCatalog(catalog)
+    return this.createDeletePlan(catalog.entries, sourceId, catalog.signature)
+  }
+
+  private async createDeletePlan(
+    entries: Entry[],
+    clearSource?: SessionSourceId,
+    sourceSignature?: string
+  ): Promise<SessionDeletePreview> {
+    for (const [token, plan] of this.plans) if (plan.expires < Date.now()) this.plans.delete(token)
     if (entries.length > 50_000)
       throw new AppError('INVALID_INPUT', '关联会话超过 50,000 个，请分批删除。')
+    await this.assertIdleEntries(entries)
     const token = randomUUID()
-    this.plans.set(token, { entries, expires: Date.now() + 5 * 60_000 })
+    this.plans.set(token, {
+      entries,
+      clearSource,
+      sourceSignature,
+      expires: Date.now() + 5 * 60_000
+    })
     while (this.plans.size > 10) this.plans.delete(this.plans.keys().next().value!)
     return {
       token,
+      clearSource,
       sessions: entries.map(summary),
       notes: [
-        '将永久删除所列完整会话及对应的本地关联记录，不保留回收站或会话备份。项目代码、供应商配置和 Claude 项目记忆不在删除范围内。',
+        ...(clearSource
+          ? [
+              `范围：${SESSION_SOURCE_NAMES[clearSource]} 的全部已发现会话，包括归档和隐藏的空会话。当前搜索、项目和时间筛选不限制此次清空。`
+            ]
+          : []),
+        '将永久删除所列完整会话及对应的本地关联记录，不保留回收站或会话备份。项目代码和供应商配置不在删除范围内。',
         '请先关闭其他窗口中仍打开的这些会话，避免原工具再次写入记录。',
-        ...(entries.some((e) => e.sourceId.startsWith('codex'))
-          ? ['Codex 使用原工具删除接口；该接口还会删除目标会话的派生子会话。']
-          : []),
-        ...(entries.some((e) => e.sourceId === 'copilot-cli')
-          ? [
-              'Copilot 仅请求删除本地磁盘会话；已同步到 GitHub 的副本需要在原工具或 GitHub 中另行管理。'
-            ]
-          : []),
-        ...(entries.some((e) => e.sourceId === 'copilot-vscode')
-          ? [
-              'VS Code 会话采用本地存储适配；请退出所有 VS Code 窗口后删除，避免编辑器缓存将会话重新写回。'
-            ]
-          : [])
+        ...new Set(entries.flatMap((entry) => this.adapters[entry.sourceId].deleteNotes))
       ]
     }
   }
@@ -309,46 +285,64 @@ export class SessionService {
     if (!plan || plan.expires < Date.now())
       throw new AppError('CONCURRENT_MODIFICATION', '删除确认已过期，请重新预览后确认。')
     // Check the entire batch before deleting its first entry.
-    const sources = [...new Set(plan.entries.map((entry) => entry.sourceId))]
-    const catalogs = new Map<SessionSourceId, Catalog>()
+    const sources = plan.clearSource
+      ? [plan.clearSource]
+      : [...new Set(plan.entries.map((entry) => entry.sourceId))]
+    const currentEntries = new Map<string, Entry>()
+    const plannedKeys = new Set(plan.entries.map((entry) => entry.key))
     for (const source of sources) {
-      const catalog = await this.catalog(source, true)
+      const catalog = await this.catalog(source, true, Boolean(plan.clearSource))
+      if (plan.clearSource) {
+        this.requireCompleteCatalog(catalog)
+        if (
+          catalog.signature !== plan.sourceSignature ||
+          catalog.entries.some((entry) => !plannedKeys.has(entry.key))
+        )
+          throw new AppError(
+            'CONCURRENT_MODIFICATION',
+            '确认后会话范围或数据目录发生变化，未开始清空，请重新预览。'
+          )
+      }
       for (const entry of plan.entries.filter((item) => item.sourceId === source))
         this.requireNativeCatalog(catalog, entry)
-      catalogs.set(source, catalog)
-      const related = descendants(catalog.entries, plan.entries)
-      if (related.some((entry) => !plan.entries.some((old) => old.key === entry.key)))
+      for (const entry of catalog.entries) currentEntries.set(entry.key, entry)
+      const related = this.related(catalog.entries, plan.entries)
+      if (related.some((entry) => !plannedKeys.has(entry.key)))
         throw new AppError(
           'CONCURRENT_MODIFICATION',
           '确认后出现了新的派生会话，请重新预览删除范围。'
         )
     }
     for (const old of plan.entries) {
-      const current = catalogs.get(old.sourceId)!.entries.find((entry) => entry.key === old.key)
+      const current = currentEntries.get(old.key)
       if (!current || current.revision !== old.revision)
         throw new AppError(
           'CONCURRENT_MODIFICATION',
           '确认后会话发生了变化，本次未开始删除，请刷新后重试。'
         )
-      await this.assertIdle(current)
     }
+    await this.assertIdleEntries(plan.entries.map((entry) => currentEntries.get(entry.key)!))
     const result: SessionDeleteResult = { deleted: [], failures: [], warnings: [] }
     const affected = new Set(plan.entries.map((e) => e.key))
     // Delete each Codex root once; its official API removes the confirmed subtree.
-    const roots = plan.entries.filter((entry) => !hasSelectedAncestor(entry, plan.entries))
+    const roots = plan.entries.filter(
+      (entry) => !this.adapters[entry.sourceId].hasSelectedAncestor?.(entry, plan.entries)
+    )
+    const groups = roots.map((entry) => ({
+      entry,
+      related: this.adapters[entry.sourceId].related ? this.related(plan.entries, [entry]) : [entry]
+    }))
     if (
-      new Set(
-        roots.flatMap((entry) => descendants(plan.entries, [entry]).map((child) => child.key))
-      ).size !== plan.entries.length
+      new Set(groups.flatMap(({ related }) => related.map((child) => child.key))).size !==
+      plan.entries.length
     )
       throw new AppError(
         'INVALID_INPUT',
         '会话的派生关系异常，未执行删除。请在原工具中检查这些会话。'
       )
-    for (const entry of roots) {
-      const related = descendants(plan.entries, [entry])
+    for (const { entry, related } of groups) {
       try {
-        const warnings = await this.remove(entry)
+        const warnings = await this.adapters[entry.sourceId].remove(entry)
         result.deleted.push(...related.map((child) => child.key))
         for (const message of warnings)
           result.warnings.push({ key: entry.key, title: entry.title, message })
@@ -373,23 +367,24 @@ export class SessionService {
     const sources = await this.sources(entry.sourceId)
     if (!sources.some((source) => source.directory === entry.source.directory))
       throw new AppError('CONCURRENT_MODIFICATION', '会话目录已变化，请刷新列表。')
-    if (entry.file) {
-      await withinRoot(entry.source.directory, entry.file)
-      if (
-        (entry.vscode ? await entry.vscode.fingerprint() : await fingerprint(entry.file)) !==
-        entry.fileRevision
-      ) {
-        this.conversations.delete(key)
-        this.catalogs.delete(entry.sourceId)
-        throw new AppError('CONCURRENT_MODIFICATION', '会话刚刚被原工具更新，请刷新后重新打开。')
-      }
+    try {
+      await assertUnchanged(entry)
+    } catch (error) {
+      this.conversations.delete(key)
+      this.catalogs.delete(entry.sourceId)
+      throw error
     }
     return entry
   }
 
-  private async catalog(id: SessionSourceId, refresh = false): Promise<Catalog> {
+  private async catalog(
+    id: SessionSourceId,
+    refresh = false,
+    includeEmpty = false
+  ): Promise<Catalog> {
     const sources = await this.sources(id)
     const signature = JSON.stringify(sources.map(({ directory, state }) => [directory, state]))
+    if (includeEmpty) return this.scanSources(sources, signature, true)
     const pending = this.catalogs.get(id)
     if (pending && !refresh) {
       const cached = await pending
@@ -405,11 +400,15 @@ export class SessionService {
     }
   }
 
-  private async scanSources(sources: SessionSource[], signature: string): Promise<Catalog> {
+  private async scanSources(
+    sources: SessionSource[],
+    signature: string,
+    includeEmpty = false
+  ): Promise<Catalog> {
     const catalogs: Catalog[] = []
     for (const source of sources) {
       try {
-        catalogs.push(await this.scan(source))
+        catalogs.push(await this.scan(source, includeEmpty))
       } catch (error) {
         catalogs.push({
           source,
@@ -427,9 +426,12 @@ export class SessionService {
     const entries = catalogs
       .flatMap((item) => item.entries)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.key.localeCompare(b.key))
-    for (const [key, entry] of this.entries)
-      if (entry.sourceId === source.id) this.entries.delete(key)
-    for (const entry of entries) this.entries.set(entry.key, entry)
+    // Hidden entries discovered for clearing must never leak into the browsing cache.
+    if (!includeEmpty) {
+      for (const [key, entry] of this.entries)
+        if (entry.sourceId === source.id) this.entries.delete(key)
+      for (const entry of entries) this.entries.set(entry.key, entry)
+    }
     return {
       source,
       entries,
@@ -443,287 +445,51 @@ export class SessionService {
     }
   }
 
-  private async scan(source: SessionSource): Promise<Catalog> {
-    const catalog: Catalog = {
-      source,
-      entries: [],
-      warnings: [],
-      expires: Date.now() + 30_000,
-      nativeAvailable: false
-    }
-    if (source.state !== 'ready') {
-      if (source.state === 'error') catalog.warnings.push(`${source.directory}：${source.message}`)
-      return catalog
-    }
-    const kind = sourceKind(source.id)
-    const root = source.directory
-    if (kind === 'vscode') {
-      const scanned = await scanVsCodeSessions(root)
-      catalog.warnings.push(...scanned.warnings)
-      catalog.entries = scanned.sessions.map((session) => ({
-        ...session.summary,
-        key: keyFor(source, `${session.files.storageDirectory}\0${session.summary.sessionId}`),
+  private async scan(source: SessionSource, includeEmpty = false): Promise<Catalog> {
+    if (source.state !== 'ready')
+      return {
         source,
-        sourceId: source.id,
-        file: session.files.primary,
-        fileRevision: session.summary.revision,
-        vscode: session.files
-      }))
-      return catalog
-    }
-    const files =
-      kind === 'claude'
-        ? await walk(
-            join(root, 'projects'),
-            1,
-            (name) => name.endsWith('.jsonl') && !name.startsWith('agent-')
-          )
-        : kind === 'codex'
-          ? [
-              ...(await walk(join(root, 'sessions'), 5, (name) => name.endsWith('.jsonl'))),
-              ...(await walk(join(root, 'archived_sessions'), 5, (name) => name.endsWith('.jsonl')))
-            ]
-          : await walk(
-              join(root, 'session-state'),
-              1,
-              (name) => name === 'events.jsonl' || name.endsWith('.jsonl')
-            )
-    let invalid = 0
-    for (let offset = 0; offset < files.length; offset += 8) {
-      const entries = await Promise.all(
-        files.slice(offset, offset + 8).map(async (file) => {
-          try {
-            await withinRoot(root, file)
-            const [events, info, fileRevision] = await Promise.all([
-              sampleEvents(file),
-              stat(file),
-              fingerprint(file)
-            ])
-            const fallbackId =
-              kind === 'copilot' ? basename(dirname(file)) : basename(file, '.jsonl')
-            const parsed = parseConversation(kind, events, fallbackId, false)
-            if (kind === 'claude' && parsed.sessionId !== fallbackId)
-              throw new AppError('INVALID_INPUT', '会话标识与文件名不一致，已跳过此记录。')
-            const meta = events.map(record).find((event) => event.type === 'session_meta')
-            const spawn = record(record(record(record(meta?.payload).source).subagent).thread_spawn)
-            const entry: Entry = {
-              key: keyFor(source, parsed.sessionId),
-              source,
-              sourceId: source.id,
-              sessionId: parsed.sessionId,
-              title: parsed.title,
-              project: parsed.project || (kind === 'claude' ? basename(dirname(file)) : ''),
-              updatedAt: info.mtime.toISOString(),
-              createdAt: info.birthtime.toISOString(),
-              revision: fileRevision,
-              fileRevision,
-              file,
-              archived: kind === 'codex' && file.includes('archived_sessions'),
-              parentId: text(spawn.parent_thread_id) || undefined
-            }
-            return entry
-          } catch {
-            invalid++
-            return null
-          }
-        })
-      )
-      catalog.entries.push(...entries.filter((entry): entry is Entry => entry !== null))
-    }
-    if (invalid) catalog.warnings.push(`${invalid} 个会话文件无法读取，请检查目录权限或记录格式。`)
-    if (kind !== 'claude') {
-      try {
-        await this.mergeNative(catalog)
-        catalog.nativeAvailable = true
-      } catch {
-        catalog.warnings.push(
-          '原工具会话接口暂不可用，当前显示本地日志。需要更新或安装对应 CLI 才能执行删除。'
-        )
+        entries: [],
+        warnings: source.state === 'error' ? [source.directory + '：' + source.message] : [],
+        nativeAvailable: false,
+        expires: Date.now() + 30_000
       }
-    } else {
-      // Older Claude versions cache user titles here; the transcript remains the source of truth.
-      const projectDirs = [...new Set(catalog.entries.map((entry) => dirname(entry.file!)))]
-      for (const directory of projectDirs) {
-        try {
-          const indexPath = join(directory, 'sessions-index.json')
-          await withinRoot(root, indexPath)
-          const index = record(JSON.parse(await readFile(indexPath, 'utf8')))
-          if (!Array.isArray(index.entries)) continue
-          for (const raw of index.entries) {
-            const item = record(raw)
-            const entry = catalog.entries.find((entry) => entry.sessionId === item.sessionId)
-            if (entry) {
-              entry.title = text(item.customTitle) || text(item.summary) || entry.title
-              entry.project = text(item.projectPath) || entry.project
-            }
-          }
-        } catch (error) {
-          if (!missing(error))
-            catalog.warnings.push('部分 Claude 项目索引无法读取，已使用会话记录中的信息。')
-        }
-      }
+    const result = await this.adapters[source.id].scan(source, includeEmpty)
+    return {
+      source,
+      entries: [...new Map(result.entries.map((entry) => [entry.key, entry])).values()],
+      warnings: result.warnings,
+      nativeAvailable: result.canDelete,
+      expires: Date.now() + 30_000
     }
-    catalog.entries = [
-      ...new Map(catalog.entries.map((entry) => [entry.key, entry])).values()
-    ].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.key.localeCompare(b.key))
-    return catalog
   }
 
-  private async mergeNative(catalog: Catalog): Promise<void> {
-    const kind = sourceKind(catalog.source.id) as 'codex' | 'copilot'
-    await this.rpc(kind, catalog.source, async (client) => {
-      const rows: Array<{ value: unknown; archived: boolean }> = []
-      if (kind === 'copilot') {
-        const response = record(await client.request('session.list', {}))
-        if (!Array.isArray(response.sessions)) throw new Error('Unsupported session list')
-        rows.push(
-          ...response.sessions
-            .filter((s) => !record(s).isRemote)
-            .map((value) => ({ value, archived: false }))
-        )
-      } else {
-        for (const archived of [false, true]) {
-          let cursor: string | undefined
-          do {
-            const response = record(
-              await client.request('thread/list', {
-                archived,
-                limit: 100,
-                cursor,
-                sourceKinds: [
-                  'cli',
-                  'vscode',
-                  'exec',
-                  'appServer',
-                  'subAgent',
-                  'subAgentReview',
-                  'subAgentCompact',
-                  'subAgentThreadSpawn',
-                  'subAgentOther',
-                  'unknown'
-                ],
-                modelProviders: [],
-                sortKey: 'updated_at'
-              })
-            )
-            if (!Array.isArray(response.data)) throw new Error('Unsupported thread list')
-            rows.push(...response.data.map((value) => ({ value, archived })))
-            cursor = text(response.nextCursor) || undefined
-            if (rows.length >= 50_000) throw new Error('Too many sessions')
-          } while (cursor)
-        }
-      }
-      const byId = new Map(catalog.entries.map((entry) => [entry.sessionId, entry]))
-      for (const { value, archived } of rows) {
-        const row = record(value)
-        const id = text(row.id) || text(row.sessionId)
-        if (!id) continue
-        const existing = byId.get(id)
-        const updatedAt = iso(
-          row.updatedAt ?? row.modifiedTime,
-          existing?.updatedAt ?? new Date(0).toISOString()
-        )
-        const context = record(row.context)
-        const spawn = record(record(record(row.source).subAgent).thread_spawn)
-        const entry: Entry = {
-          ...existing,
-          key: keyFor(catalog.source, id),
-          source: catalog.source,
-          sourceId: catalog.source.id,
-          sessionId: id,
-          title:
-            text(row.name) ||
-            text(row.summary) ||
-            text(row.preview).slice(0, 160) ||
-            existing?.title ||
-            '未命名会话',
-          project: text(row.cwd) || text(context.cwd) || existing?.project || '',
-          createdAt: iso(row.createdAt ?? row.startTime, existing?.createdAt ?? updatedAt),
-          updatedAt,
-          archived,
-          revision: `${existing?.fileRevision ?? id}:${updatedAt}`,
-          parentId:
-            existing?.parentId ||
-            text(row.parentThreadId) ||
-            text(spawn.parent_thread_id) ||
-            undefined
-        }
-        if (existing) Object.assign(existing, entry)
-        else {
-          catalog.entries.push(entry)
-          byId.set(id, entry)
-        }
-      }
-    })
+  private requireCompleteCatalog(catalog: Catalog): void {
+    if (catalog.warnings.length)
+      throw new AppError(
+        'UNKNOWN',
+        `未能完整读取会话，无法清空。请先处理以下问题：${catalog.warnings.join('；')}`
+      )
+    for (const entry of catalog.entries) this.requireNativeCatalog(catalog, entry)
+  }
+
+  private related(catalog: Entry[], selected: Entry[]): Entry[] {
+    const keys = new Set(selected.map((entry) => entry.key))
+    const found = new Map(
+      catalog.filter((entry) => keys.has(entry.key)).map((entry) => [entry.key, entry])
+    )
+    for (const id of new Set(catalog.map((entry) => entry.sourceId)))
+      for (const entry of this.adapters[id].related?.(catalog, selected) ?? [])
+        found.set(entry.key, entry)
+    return [...found.values()]
   }
 
   private async conversation(entry: Entry): Promise<Conversation> {
     const cached = this.conversations.get(entry.key)
     if (cached?.revision === entry.revision) return cached
-    let detail: Conversation
-    if (entry.vscode) {
-      const parsed = await readVsCodeSession(entry.vscode)
-      if ((await entry.vscode.fingerprint()) !== entry.fileRevision)
-        throw new AppError('CONCURRENT_MODIFICATION', 'VS Code 会话已变化，请刷新后重试。')
-      detail = { ...parsed, revision: entry.revision }
-    } else if (entry.file) {
-      await withinRoot(entry.source.directory, entry.file)
-      const before = await fingerprint(entry.file)
-      const { events, warnings } = await readEvents(entry.file)
-      const parsed = parseConversation(
-        sourceKind(entry.sourceId) as 'claude' | 'codex' | 'copilot',
-        events,
-        entry.sessionId
-      )
-      if ((await fingerprint(entry.file)) !== before || before !== entry.fileRevision)
-        throw new AppError('CONCURRENT_MODIFICATION', '读取过程中会话发生变化，请刷新后重新打开。')
-      detail = { messages: parsed.messages, warnings, revision: entry.revision }
-    } else {
-      detail = await this.rpc(
-        sourceKind(entry.sourceId) as 'codex' | 'copilot',
-        entry.source,
-        async (client) => {
-          if (sourceKind(entry.sourceId) === 'copilot') {
-            const response = record(
-              await client.request('session.getMessages', { sessionId: entry.sessionId })
-            )
-            if (!Array.isArray(response.events))
-              throw new AppError(
-                'UNKNOWN',
-                'Copilot CLI 返回了不受支持的消息格式，请更新 CLI 后重试。'
-              )
-            const parsed = parseConversation('copilot', response.events, entry.sessionId)
-            return { messages: parsed.messages, warnings: [], revision: entry.revision }
-          }
-          const turns: unknown[] = []
-          let cursor: string | undefined
-          try {
-            do {
-              const response = record(
-                await client.request('thread/turns/list', {
-                  threadId: entry.sessionId,
-                  limit: 100,
-                  cursor,
-                  itemsView: 'full',
-                  sortDirection: 'asc'
-                })
-              )
-              if (!Array.isArray(response.data)) throw new Error('Unsupported turn response')
-              turns.push(...response.data)
-              cursor = text(response.nextCursor) || undefined
-              if (turns.length > 100_000) throw new Error('Too many turns')
-            } while (cursor)
-          } catch (error) {
-            if (!(error instanceof SessionRpcError) || error.rpcCode !== -32601) throw error
-            const response = record(
-              await client.request('thread/read', { threadId: entry.sessionId, includeTurns: true })
-            )
-            const thread = record(response.thread)
-            turns.push(...(Array.isArray(thread.turns) ? thread.turns : []))
-          }
-          return { messages: codexThreadMessages(turns), warnings: [], revision: entry.revision }
-        }
-      )
+    const detail: Conversation = {
+      ...(await this.adapters[entry.sourceId].read(entry)),
+      revision: entry.revision
     }
     if (!detail.messages.length)
       detail.warnings.push('此会话没有可识别的对话消息，可能是空会话或原工具采用了新的记录格式。')
@@ -742,156 +508,9 @@ export class SessionService {
     return detail
   }
 
-  private async assertIdle(entry: Entry): Promise<void> {
-    if (entry.vscode) {
-      await assertVsCodeClosed()
-      if ((await entry.vscode.fingerprint()) !== entry.fileRevision)
-        throw new AppError('CONCURRENT_MODIFICATION', 'VS Code 会话已变化，请刷新后重试。')
-    }
-    if (entry.file) {
-      await withinRoot(entry.source.directory, entry.file)
-      if (!entry.vscode && (await fingerprint(entry.file)) !== entry.fileRevision)
-        throw new AppError('CONCURRENT_MODIFICATION', '会话已被更新，请刷新后重新确认。')
-      if (Date.now() - (await stat(entry.file)).mtimeMs < 15_000)
-        throw new AppError(
-          'CONCURRENT_MODIFICATION',
-          '此会话最近仍在写入，请先关闭原工具中的会话，等待 15 秒后刷新重试。'
-        )
-    }
-    if (sourceKind(entry.sourceId) === 'claude') {
-      const markers = await walk(join(entry.source.directory, 'sessions'), 0, (name) =>
-        name.endsWith('.json')
-      )
-      for (const marker of markers) {
-        await withinRoot(entry.source.directory, marker)
-        const state = record(JSON.parse(await readFile(marker, 'utf8')))
-        if (state.sessionId !== entry.sessionId) continue
-        if (typeof state.pid === 'number' && Number.isSafeInteger(state.pid) && state.pid > 0) {
-          let alive = true
-          if (entry.source.distribution)
-            alive = await this.wsl.isProcessRunning(state.pid, entry.source.distribution)
-          else
-            try {
-              process.kill(state.pid, 0)
-            } catch (error) {
-              alive = !(error instanceof Error && 'code' in error && error.code === 'ESRCH')
-            }
-          if (alive)
-            throw new AppError(
-              'CONCURRENT_MODIFICATION',
-              '此 Claude 会话仍在运行，请先关闭后重试。'
-            )
-        }
-      }
-    } else if (sourceKind(entry.sourceId) === 'codex') {
-      await this.rpc('codex', entry.source, async (client) => {
-        const response = record(await client.request('thread/read', { threadId: entry.sessionId }))
-        if (record(record(response.thread).status).type === 'active')
-          throw new AppError('CONCURRENT_MODIFICATION', '此 Codex 会话正在运行，请先关闭后重试。')
-      })
-    }
-  }
-
-  private async remove(entry: Entry): Promise<string[]> {
-    if (entry.vscode) {
-      await this.assertIdle(entry)
-      return removeVsCodeSession(entry.vscode, entry.sessionId)
-    }
-    if (sourceKind(entry.sourceId) !== 'claude') {
-      await this.rpc(
-        sourceKind(entry.sourceId) as 'codex' | 'copilot',
-        entry.source,
-        async (client) => {
-          const response = await client.request(
-            sourceKind(entry.sourceId) === 'codex' ? 'thread/delete' : 'session.delete',
-            sourceKind(entry.sourceId) === 'codex'
-              ? { threadId: entry.sessionId }
-              : { sessionId: entry.sessionId }
-          )
-          if (sourceKind(entry.sourceId) === 'copilot' && record(response).success !== true)
-            throw new AppError('UNKNOWN', 'Copilot CLI 未确认删除成功，请刷新列表后重试。')
-        }
-      )
-      return []
-    }
-    if (!entry.file || !/^[\w-]{1,200}$/u.test(entry.sessionId))
-      throw new AppError('INVALID_INPUT', 'Claude 会话标识格式不受支持，未执行删除。')
-    const root = entry.source.directory
-    const sessionDir = join(dirname(entry.file), entry.sessionId)
-    const targets = [
-      sessionDir,
-      ...['file-history', 'tasks', 'image-cache', 'session-env', 'uploads'].map((dir) =>
-        join(root, dir, entry.sessionId)
-      ),
-      join(root, 'debug', `${entry.sessionId}.txt`)
-    ]
-    // Validate all known file targets before making changes.
-    for (const target of [entry.file, ...targets]) await withinRoot(root, target)
-    await this.assertIdle(entry)
-    // Keep associated data intact if removing the transcript itself fails.
-    await unlink(entry.file)
-    const warnings: string[] = []
-    for (const target of targets) {
-      try {
-        await withinRoot(root, target)
-        await rm(target, { recursive: true, force: true })
-      } catch {
-        warnings.push('会话正文已删除，部分附件或工具记录未能清理。请检查数据目录权限和文件占用。')
-      }
-    }
-    try {
-      await this.removeClaudeIndexes(entry)
-    } catch {
-      warnings.push(
-        '会话正文已删除，共享历史或项目索引未能完整清理。请关闭原工具并检查历史文件权限。'
-      )
-    }
-    return [...new Set(warnings)]
-  }
-
-  private async removeClaudeIndexes(entry: Entry): Promise<void> {
-    const index = join(dirname(entry.file!), 'sessions-index.json')
-    const history = join(entry.source.directory, 'history.jsonl')
-    for (const path of [index, history]) {
-      try {
-        await withinRoot(entry.source.directory, path)
-        const before = await fingerprint(path)
-        if ((await stat(path)).size > 32 * 1024 * 1024)
-          throw new AppError('UNKNOWN', '共享历史文件过大，正文已删除，请在原工具中整理历史索引。')
-        const original = await readFile(path, 'utf8')
-        let next: string
-        if (path === index) {
-          const document = record(JSON.parse(original))
-          if (!Array.isArray(document.entries)) continue
-          const remaining = document.entries.filter(
-            (row) => record(row).sessionId !== entry.sessionId
-          )
-          if (remaining.length === document.entries.length) continue
-          document.entries = remaining
-          next = JSON.stringify(document, null, 2) + '\n'
-        } else {
-          next = original
-            .split('\n')
-            .filter((line) => {
-              try {
-                return record(JSON.parse(line)).sessionId !== entry.sessionId
-              } catch {
-                return true
-              }
-            })
-            .join('\n')
-        }
-        if (next === original) continue
-        if ((await fingerprint(path)) !== before)
-          throw new AppError(
-            'CONCURRENT_MODIFICATION',
-            '会话记录已移除，但共享历史正在被原工具写入，未覆盖该历史文件。请关闭原工具后重试清理。'
-          )
-        await writeTextAtomic(path, next)
-      } catch (error) {
-        if (!missing(error)) throw error
-      }
-    }
+  private async assertIdleEntries(entries: Entry[]): Promise<void> {
+    for (const id of new Set(entries.map((entry) => entry.sourceId)))
+      await this.adapters[id].assertIdle(entries.filter((entry) => entry.sourceId === id))
   }
 
   private async rpc<T>(
@@ -930,55 +549,12 @@ export class SessionService {
   }
 
   private requireNativeCatalog(catalog: Catalog, entry: Entry): void {
-    if (
-      ['codex', 'copilot'].includes(sourceKind(catalog.source.id)) &&
-      catalog.unavailableDirectories?.includes(entry.source.directory)
-    )
+    if (catalog.unavailableDirectories?.includes(entry.source.directory))
       throw new AppError(
         'UNKNOWN',
         '无法确认原工具中的完整会话列表，请安装或更新对应 CLI 后刷新，再执行删除。'
       )
   }
-}
-
-function descendants(catalog: Entry[], selected: Entry[]): Entry[] {
-  const selectedKeys = new Set(selected.map((entry) => entry.key))
-  const found = new Map(
-    catalog.filter((entry) => selectedKeys.has(entry.key)).map((entry) => [entry.key, entry])
-  )
-  const children = new Map<string, Entry[]>()
-  for (const entry of catalog) {
-    if (sourceKind(entry.sourceId) !== 'codex' || !entry.parentId) continue
-    const key = `${entry.sourceId}\0${entry.source.directory}\0${entry.parentId}`
-    const group = children.get(key) ?? []
-    group.push(entry)
-    children.set(key, group)
-  }
-  const queue = [...found.values()]
-  for (let offset = 0; offset < queue.length; offset++) {
-    const parent = queue[offset]
-    for (const child of children.get(
-      `${parent.sourceId}\0${parent.source.directory}\0${parent.sessionId}`
-    ) ?? []) {
-      if (found.has(child.key)) continue
-      found.set(child.key, child)
-      queue.push(child)
-    }
-  }
-  return [...found.values()]
-}
-
-function hasSelectedAncestor(entry: Entry, selected: Entry[]): boolean {
-  if (sourceKind(entry.sourceId) !== 'codex') return false
-  return Boolean(
-    entry.parentId &&
-    selected.some(
-      (item) =>
-        item.sourceId === entry.sourceId &&
-        item.source.directory === entry.source.directory &&
-        item.sessionId === entry.parentId
-    )
-  )
 }
 
 function summary(entry: Entry): SessionSummary {

@@ -38,6 +38,12 @@ export function registerSessionIpc(rendererUrl: string, service: SessionService)
     service.selectAll(input)
   )
   registerBusinessHandler(
+    SESSION_CHANNELS.previewClear,
+    rendererUrl,
+    (args) => sourceId(argument(args).sourceId),
+    (id) => service.exclusive(() => service.previewClear(id))
+  )
+  registerBusinessHandler(
     SESSION_CHANNELS.read,
     rendererUrl,
     (args) => {

@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { lstat, readFile, readdir, unlink } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import Database from 'better-sqlite3'
@@ -10,6 +10,8 @@ import type { SessionMessage, SessionSummary } from '@shared/sessions'
 import { AppError } from '../errors'
 import { fingerprint, missing, readEvents, walk, withinRoot } from './files'
 import { record, text } from './messages'
+import { assertFileIdle, assertUnchanged, sessionKey } from './storage'
+import type { SessionAdapter, SessionContext, SessionEntry } from './types'
 
 const INDEX_KEY = 'chat.ChatSessionStore.index'
 const runFile = promisify(execFile)
@@ -102,7 +104,10 @@ async function sessionFiles(
   return files
 }
 
-export async function scanVsCodeSessions(root: string): Promise<{
+export async function scanVsCodeSessions(
+  root: string,
+  includeEmpty = false
+): Promise<{
   sessions: Array<{ summary: Omit<SessionSummary, 'key' | 'sourceId'>; files: VsCodeSessionFiles }>
   warnings: string[]
 }> {
@@ -156,7 +161,10 @@ export async function scanVsCodeSessions(root: string): Promise<{
     const paths = await walk(location.storage, 0, (name) => /\.(json|jsonl)$/u.test(name))
     const ids = new Set(paths.map((path) => basename(path).replace(/\.(json|jsonl)$/u, '')))
     for (const id of ids) {
-      if (!validId(id)) continue
+      if (!validId(id)) {
+        warnings.push('部分 VS Code 会话文件名不受支持，未读取这些记录。')
+        continue
+      }
       try {
         const files = await sessionFiles(root, location.storage, id, location.index)
         const before = await files.fingerprint()
@@ -165,6 +173,9 @@ export async function scanVsCodeSessions(root: string): Promise<{
         if (text(data.sessionId) && data.sessionId !== id) throw new Error('Session ID mismatch')
         const metadata = record(index[id])
         const requests = Array.isArray(data.requests) ? data.requests.map(record) : []
+        // Persisted drafts are not conversations. Inspect the fully replayed requests;
+        // a real conversation can still have the title "New Chat".
+        if (!includeEmpty && requests.length === 0) continue
         const first = requests
           .map((request) =>
             typeof request.message === 'string'
@@ -334,7 +345,8 @@ export async function readVsCodeSession(
           role: part.kind === 'thinking' ? 'system' : 'tool',
           label: text(part.toolId) || text(part.kind) || '工具记录',
           text: JSON.stringify(rawPart, null, 2),
-          timestamp: timestamp || undefined
+          timestamp: timestamp || undefined,
+          kind: part.kind === 'thinking' ? 'context' : 'activity'
         })
       }
     }
@@ -451,4 +463,53 @@ export async function removeVsCodeSession(
     warnings.push('VS Code 会话正文已删除，标题索引未能清理。请检查 state.vscdb 权限或文件占用。')
   }
   return warnings
+}
+
+export function createVsCodeSessions(context: SessionContext): SessionAdapter {
+  const filesByEntry = new WeakMap<SessionEntry, VsCodeSessionFiles>()
+  function filesFor(entry: SessionEntry): VsCodeSessionFiles {
+    const files = filesByEntry.get(entry)
+    if (!files) throw new AppError('INVALID_INPUT', 'VS Code 会话引用失效，请刷新后重试。')
+    return files
+  }
+  return {
+    directories: async () => {
+      const configured = context.database.getSetting<string>('device_settings', 'copilot.path')
+      return [defaultVsCodeUserDirectory(), ...(configured ? [dirname(configured)] : [])]
+    },
+    async scan(source, includeEmpty) {
+      const scanned = await scanVsCodeSessions(source.directory, includeEmpty)
+      const entries = scanned.sessions.map(({ summary, files }) => {
+        const entry: SessionEntry = {
+          ...summary,
+          source,
+          sourceId: source.id,
+          key: sessionKey(source, `${files.storageDirectory}\0${summary.sessionId}`),
+          file: files.primary,
+          fileRevision: summary.revision,
+          fingerprint: files.fingerprint
+        }
+        filesByEntry.set(entry, files)
+        return entry
+      })
+      return { entries, warnings: scanned.warnings, canDelete: true }
+    },
+    async read(entry) {
+      await assertUnchanged(entry)
+      const content = await readVsCodeSession(filesFor(entry))
+      await assertUnchanged(entry)
+      return content
+    },
+    async assertIdle(entries) {
+      await assertVsCodeClosed()
+      for (const entry of entries) await assertFileIdle(entry)
+    },
+    async remove(entry) {
+      await assertFileIdle(entry)
+      return removeVsCodeSession(filesFor(entry), entry.sessionId)
+    },
+    deleteNotes: [
+      '请先退出所有 VS Code 窗口。清空全部还会删除列表中隐藏的空会话及其中保存的未发送草稿。'
+    ]
+  }
 }

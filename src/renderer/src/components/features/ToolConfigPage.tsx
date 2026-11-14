@@ -39,6 +39,7 @@ interface ToolConfigPageProps {
   section: ToolPageSection
   onHome: () => void
   onConfigure: () => void
+  onSessions: () => void
   children?: React.ReactNode
 }
 
@@ -80,6 +81,7 @@ export function ToolConfigPage({
   section,
   onHome,
   onConfigure,
+  onSessions,
   children
 }: ToolConfigPageProps): React.JSX.Element {
   const details = toolDetails[toolId]
@@ -127,6 +129,7 @@ export function ToolConfigPage({
               onHome={onHome}
               onAdd={() => onAdd(toolId)}
               onConfigure={onConfigure}
+              onSessions={onSessions}
             />
           </div>
         </CardHeader>

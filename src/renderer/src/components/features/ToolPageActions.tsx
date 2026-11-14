@@ -1,4 +1,4 @@
-import { ArrowLeft, Plus, SlidersHorizontal } from 'lucide-react'
+import { ArrowLeft, MessageSquareText, Plus, SlidersHorizontal } from 'lucide-react'
 import { Button } from '@renderer/components/ui/button'
 
 export type ToolPageSection = 'home' | 'configuration' | 'editor'
@@ -8,13 +8,15 @@ export function ToolPageActions({
   busy,
   onHome,
   onAdd,
-  onConfigure
+  onConfigure,
+  onSessions
 }: {
   section: ToolPageSection
   busy: boolean
   onHome: () => void
   onAdd: () => void
   onConfigure: () => void
+  onSessions?: () => void
 }): React.JSX.Element {
   return (
     <div
@@ -46,6 +48,12 @@ export function ToolPageActions({
         <SlidersHorizontal aria-hidden="true" />
         功能配置
       </Button>
+      {onSessions && (
+        <Button variant="outline" className="h-11 gap-2 px-5" disabled={busy} onClick={onSessions}>
+          <MessageSquareText aria-hidden="true" />
+          会话管理
+        </Button>
+      )}
     </div>
   )
 }

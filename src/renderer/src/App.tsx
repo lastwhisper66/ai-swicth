@@ -25,7 +25,8 @@ import { ProviderForm } from '@renderer/components/features/ProviderForm'
 import { SettingsPage, type SettingsSection } from '@renderer/components/features/SettingsPage'
 import { ToolConfigPage } from '@renderer/components/features/ToolConfigPage'
 import { CopilotPage } from '@renderer/components/features/CopilotPage'
-import { SessionsPage } from '@renderer/components/features/SessionsPage'
+import { ToolSessionsPage } from '@renderer/components/features/sessions/ToolSessionsPage'
+import type { SessionSourceId } from '@shared/sessions'
 import { UsagePage } from '@renderer/components/features/UsagePage'
 import { ToolFeaturesPage } from '@renderer/components/features/ToolFeaturesPage'
 import type { ToolPageSection } from '@renderer/components/features/ToolPageActions'
@@ -37,7 +38,7 @@ import { useApplications } from '@renderer/hooks/use-applications'
 import { moveItem } from '@renderer/lib/sort-order'
 
 type ProviderEditorState = { provider: ProviderSummary | null; toolId: ToolId } | null
-type MainView = ToolId | 'settings' | 'applications' | 'copilot' | 'sessions' | 'usage'
+type MainView = ToolId | 'settings' | 'applications' | 'copilot' | 'usage'
 const initialPreferences: ApplicationPreferences = {
   visible: Object.fromEntries(TOOL_IDS.map((id) => [id, true])) as Record<ToolId, boolean>,
   wsl: {},
@@ -61,6 +62,7 @@ function App(): React.JSX.Element {
   const [providerEditor, setProviderEditor] = useState<ProviderEditorState>(null)
   const [toolSection, setToolSection] = useState<ToolPageSection>('home')
   const [toolNavigation, setToolNavigation] = useState(0)
+  const [sessionSource, setSessionSource] = useState<SessionSourceId | null>(null)
   const [view, setView] = useState<MainView>('claude-code')
   const applicationList = useApplications(applicationTasks, view === 'applications')
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
@@ -85,7 +87,6 @@ function App(): React.JSX.Element {
           current !== 'settings' &&
           current !== 'applications' &&
           current !== 'copilot' &&
-          current !== 'sessions' &&
           current !== 'usage' &&
           !result.applicationPreferences.visible[current]
             ? 'applications'
@@ -278,7 +279,6 @@ function App(): React.JSX.Element {
         current !== 'settings' &&
         current !== 'applications' &&
         current !== 'copilot' &&
-        current !== 'sessions' &&
         current !== 'usage' &&
         !nextSnapshot.applicationPreferences.visible[current]
           ? 'applications'
@@ -294,7 +294,6 @@ function App(): React.JSX.Element {
         current !== 'settings' &&
         current !== 'applications' &&
         current !== 'copilot' &&
-        current !== 'sessions' &&
         current !== 'usage' &&
         !result.applicationPreferences.visible[current]
           ? 'applications'
@@ -568,6 +567,7 @@ function App(): React.JSX.Element {
           onCollapsedChange={(collapsed) => void setSidebarCollapsed(collapsed)}
           onOrderChange={setApplicationOrder}
           onViewChange={(nextView) => {
+            setSessionSource(null)
             if (nextView === 'settings') setSettingsSection('general')
             setProviderEditor(null)
             setToolSection('home')
@@ -578,10 +578,10 @@ function App(): React.JSX.Element {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <TitleBar />
           <main
-            className={`min-h-0 min-w-0 flex-1 ${view === 'sessions' ? 'overflow-hidden' : 'overflow-y-auto scrollbar-gutter-both'}`}
+            className={`min-h-0 min-w-0 flex-1 ${sessionSource !== null ? 'overflow-hidden' : 'overflow-y-auto scrollbar-gutter-both'}`}
           >
             <div
-              className={`w-full min-w-0 ${view === 'sessions' ? 'h-full px-4 py-4 lg:px-6' : 'px-5 py-6 lg:px-8 lg:py-8'}`}
+              className={`w-full min-w-0 ${sessionSource !== null ? 'h-full px-4 py-4 lg:px-6' : 'px-5 py-6 lg:px-8 lg:py-8'}`}
             >
               {connectionError && (
                 <Alert variant="destructive" className="mb-4">
@@ -593,10 +593,16 @@ function App(): React.JSX.Element {
                   </Button>
                 </Alert>
               )}
-              {view === 'usage' ? (
-                <UsagePage />
-              ) : view === 'sessions' ? (
-                <SessionsPage
+              {sessionSource !== null ? (
+                <ToolSessionsPage
+                  key={sessionSource}
+                  sourceId={sessionSource}
+                  onHome={() => {
+                    setSessionSource(null)
+                    setToolSection('home')
+                    setProviderEditor(null)
+                  }}
+                  onSourceChange={setSessionSource}
                   onBusyChange={(pending) =>
                     setPendingKey((current) =>
                       pending
@@ -607,9 +613,12 @@ function App(): React.JSX.Element {
                     )
                   }
                 />
+              ) : view === 'usage' ? (
+                <UsagePage />
               ) : view === 'copilot' ? (
                 <CopilotPage
                   key={toolNavigation}
+                  onSessions={() => setSessionSource('copilot-vscode')}
                   busy={pendingKey !== null}
                   onBusyChange={(pending) =>
                     setPendingKey((current) =>
@@ -679,6 +688,7 @@ function App(): React.JSX.Element {
               ) : (
                 <ToolConfigPage
                   toolId={view}
+                  onSessions={() => setSessionSource(view)}
                   status={snapshot?.tools[view]}
                   tools={snapshot?.tools ?? {}}
                   providers={snapshot?.providers}

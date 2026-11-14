@@ -1,12 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
   CalendarDays,
-  ChevronDown,
   Folder,
   ListFilter,
-  MessageSquareText,
   RefreshCw,
   Search,
   Trash2
@@ -33,34 +31,26 @@ import {
   SelectTrigger,
   SelectValue
 } from '@renderer/components/ui/select'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle
-} from '@renderer/components/ui/dialog'
+import { SessionDeleteDialog } from './SessionDeleteDialog'
 import { Spinner } from '@renderer/components/ui/spinner'
-import { SessionConversation } from './SessionConversation'
+import { SessionConversation } from '../SessionConversation'
 import { formatSessionTime } from '@renderer/lib/session-format'
 import { cn } from '@renderer/lib/utils'
 
 const PAGE_SIZE = 50
-type Tool = 'claude-code' | 'codex' | 'copilot-cli' | 'copilot-vscode'
-
-export function SessionsPage({
+export function SessionBrowser({
+  sourceId,
+  description,
+  relatedAction,
+  onHome,
   onBusyChange
 }: {
+  sourceId: SessionSourceId
+  description: string
+  relatedAction?: (busy: boolean) => ReactNode
+  onHome: () => void
   onBusyChange: (busy: boolean) => void
 }): React.JSX.Element {
-  const [tool, setTool] = useState<Tool>('claude-code')
-  const [environment, setEnvironment] = useState('local')
-  const sourceId = (
-    environment === 'wsl' && tool !== 'copilot-cli' && tool !== 'copilot-vscode'
-      ? `${tool}-wsl`
-      : tool
-  ) as SessionSourceId
   const [groupBy, setGroupBy] = useState<'time' | 'project'>('project')
   const [search, setSearch] = useState('')
   const [appliedSearch, setAppliedSearch] = useState('')
@@ -82,10 +72,10 @@ export function SessionsPage({
   const [selected, setSelected] = useState(new Map<string, SessionSummary>())
   const [preview, setPreview] = useState<SessionDeletePreview | null>(null)
   const [deleteResult, setDeleteResult] = useState<SessionDeleteResult | null>(null)
+  const [operationError, setOperationError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [selectingAll, setSelectingAll] = useState(false)
   const selectAllVersion = useRef(0)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
   const busyRef = useRef(false)
   const mounted = useRef(true)
 
@@ -142,6 +132,10 @@ export function SessionsPage({
         if (!response.ok) {
           setError(response.error.message)
           setData(null)
+          return
+        }
+        if (offset > 0 && offset >= response.value.total) {
+          setOffset(Math.max(0, Math.floor((response.value.total - 1) / PAGE_SIZE) * PAGE_SIZE))
           return
         }
         setData(response.value)
@@ -223,6 +217,8 @@ export function SessionsPage({
     setOffset(0)
     setSelected(new Map())
     setActive(null)
+    setDetailLoading(false)
+    setDetailError(null)
     setDetail(null)
     setDeleteResult(null)
   }
@@ -254,19 +250,41 @@ export function SessionsPage({
       return
     }
     setOperationBusy(true)
-    setDeleteError(null)
+    setOperationError(null)
     try {
       const response = await window.api.sessions.previewDelete({
         sessions: entries.map(({ key, revision }) => ({ key, revision }))
       })
       if (!mounted.current) return
       if (!response.ok) {
-        toast.error(response.error.message)
+        setOperationError(response.error.message)
         return
       }
       setPreview(response.value)
     } catch {
-      toast.error('无法生成删除预览，请刷新后重试。')
+      setOperationError('无法生成删除预览，请刷新后重试。')
+    } finally {
+      if (mounted.current) setOperationBusy(false)
+    }
+  }
+  async function prepareClear(): Promise<void> {
+    if (busyRef.current || selectingAll) return
+    setOperationBusy(true)
+    setOperationError(null)
+    try {
+      const response = await window.api.sessions.previewClear({ sourceId })
+      if (!mounted.current) return
+      if (!response.ok) {
+        setOperationError(response.error.message)
+        return
+      }
+      if (!response.value.sessions.length) {
+        toast.info('当前工具与环境没有可清理的会话。')
+        return
+      }
+      setPreview(response.value)
+    } catch {
+      setOperationError('无法生成清空预览，请刷新后重试。')
     } finally {
       if (mounted.current) setOperationBusy(false)
     }
@@ -274,15 +292,14 @@ export function SessionsPage({
   async function confirmDelete(): Promise<void> {
     if (busyRef.current || !preview) return
     setOperationBusy(true)
-    setDeleteError(null)
+    setOperationError(null)
     try {
       const response = await window.api.sessions.delete({ token: preview.token })
       if (!mounted.current) return
       if (!response.ok) {
-        setDeleteError(response.error.message)
         // Tokens are consumed on submission; the next attempt requires a new preview.
         setPreview(null)
-        toast.error(response.error.message)
+        setOperationError(response.error.message)
         setRefresh((value) => value + 1)
         return
       }
@@ -304,7 +321,7 @@ export function SessionsPage({
       setRefresh((value) => value + 1)
     } catch {
       setPreview(null)
-      toast.error('连接中断，删除结果尚未确认。请刷新列表核对后再操作。')
+      setOperationError('连接中断，删除结果尚未确认。请刷新列表核对后再操作。')
       setRefresh((value) => value + 1)
     } finally {
       if (mounted.current) setOperationBusy(false)
@@ -359,59 +376,33 @@ export function SessionsPage({
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold">
-            <MessageSquareText className="size-5" />
-            会话
-          </h1>
-          <p className="mt-1 text-xs text-muted-foreground">浏览已有对话，按完整会话管理记录</p>
+        <div className="min-w-0 flex-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="mb-2 -ml-2 h-7 text-xs text-muted-foreground"
+            disabled={busy}
+            onClick={onHome}
+          >
+            <ArrowLeft />
+            返回首页
+          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-xl font-semibold tracking-tight">
+              {SESSION_SOURCE_NAMES[sourceId]} · 会话管理
+            </h1>
+            <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground">
+              {sourceId.endsWith('-wsl') ? data?.source.distribution || 'WSL' : '本地'}
+            </span>
+          </div>
+          <p className="mt-2 max-w-3xl text-xs leading-5 text-muted-foreground">{description}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Select
-            value={tool}
-            disabled={busy}
-            onValueChange={(value) => {
-              const id = value as Tool
-              setTool(id)
-              if (id === 'copilot-cli' || id === 'copilot-vscode') setEnvironment('local')
-              setProject('all')
-              resetFilter()
-              setData(null)
-            }}
-          >
-            <SelectTrigger className="w-44" aria-label="会话工具">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="max-h-64">
-              {(['claude-code', 'codex', 'copilot-cli', 'copilot-vscode'] as const).map((id) => (
-                <SelectItem key={id} value={id}>
-                  {SESSION_SOURCE_NAMES[id]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={environment}
-            disabled={busy || tool === 'copilot-cli' || tool === 'copilot-vscode'}
-            onValueChange={(value) => {
-              setEnvironment(value)
-              setProject('all')
-              resetFilter()
-              setData(null)
-            }}
-          >
-            <SelectTrigger className="w-25" aria-label="运行环境">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="local">本机</SelectItem>
-              <SelectItem value="wsl">WSL</SelectItem>
-            </SelectContent>
-          </Select>
+          {relatedAction?.(busy)}
           <Button
             variant="outline"
             size="sm"
-            disabled={busy || loading}
+            disabled={busy || loading || selectingAll}
             onClick={() => {
               setRefresh((value) => value + 1)
               setSelected(new Map())
@@ -420,117 +411,153 @@ export function SessionsPage({
             <RefreshCw className={cn(loading && 'animate-spin')} />
             刷新
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-destructive/25 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            disabled={busy || loading || selectingAll}
+            onClick={() => void prepareClear()}
+          >
+            {busy ? <Spinner /> : <Trash2 />}清空全部会话
+          </Button>
         </div>
       </header>
-      <div
-        className={cn(
-          'flex shrink-0 flex-wrap items-center gap-2 rounded-xl border p-3',
-          active && 'hidden md:flex'
-        )}
-      >
-        <div className="relative min-w-48 flex-1">
-          <Search className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-muted-foreground" />
-          <Input
-            className="h-9 pl-9"
-            value={search}
-            maxLength={500}
-            disabled={busy}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="搜索标题、消息内容或会话 ID…"
-            aria-label="搜索会话"
-          />
-        </div>
-        <FilterSelect
-          value={scope}
-          label="搜索范围"
-          disabled={busy}
-          onChange={(value) => {
-            setScope(value as SessionSearchScope)
-            resetFilter()
-          }}
-          options={[
-            ['all', '全部内容'],
-            ['title', '标题'],
-            ['content', '消息内容'],
-            ['id', '会话 ID']
-          ]}
-        />
-        <FilterSelect
-          value={project}
-          label="项目筛选"
-          disabled={busy}
-          onChange={(value) => {
-            setProject(value)
-            resetFilter()
-          }}
-          options={[
-            ['all', '所有项目'],
-            ...(data?.projects ?? []).map((item): [string, string] => [
-              `project:${item.path}`,
-              `${item.path || '未记录项目'}（${item.count}）`
-            ])
-          ]}
-          align="end"
-        />
-        <FilterSelect
-          value={period}
-          label="时间范围"
-          disabled={busy}
-          onChange={(value) => {
-            setPeriod(value)
-            resetFilter()
-          }}
-          options={[
-            ['all', '全部时间'],
-            ['1', '最近 24 小时'],
-            ['7', '最近 7 天'],
-            ['30', '最近 30 天']
-          ]}
-        />
-        <div className="flex gap-1" aria-label="列表显示方式">
+      {operationError && (
+        <Alert variant="destructive" className="shrink-0 pr-16">
+          <AlertDescription className="max-h-20 overflow-y-auto">{operationError}</AlertDescription>
           <Button
-            size="icon-sm"
-            variant={groupBy === 'project' ? 'secondary' : 'ghost'}
-            aria-label="按项目分组"
-            title="按项目分组"
-            aria-pressed={groupBy === 'project'}
-            disabled={busy}
-            onClick={() => {
-              setGroupBy('project')
-              setOffset(0)
-            }}
+            variant="ghost"
+            size="sm"
+            className="absolute top-1 right-2"
+            aria-label="关闭操作提示"
+            onClick={() => setOperationError(null)}
           >
-            <Folder />
+            关闭
           </Button>
-          <Button
-            size="icon-sm"
-            variant={groupBy === 'time' ? 'secondary' : 'ghost'}
-            aria-label="按时间排序"
-            title="按时间排序"
-            aria-pressed={groupBy === 'time'}
-            disabled={busy}
-            onClick={() => {
-              setGroupBy('time')
-              setOffset(0)
-            }}
-          >
-            <CalendarDays />
-          </Button>
-        </div>
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-4 md:flex-row">
+        </Alert>
+      )}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
         <section
           className={cn(
-            'flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-xl border md:w-72 md:shrink-0 md:flex-none lg:w-80 xl:w-96',
-            active && 'hidden md:flex'
+            'flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-xl border lg:w-80 lg:shrink-0 lg:flex-none xl:w-90',
+            active && 'hidden lg:flex'
           )}
           aria-label="会话列表"
           aria-busy={loading}
         >
-          <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
+          <div className="grid shrink-0 grid-cols-2 gap-2 border-b bg-muted/15 p-3">
+            <div className="relative col-span-2 min-w-0">
+              <Search className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-muted-foreground" />
+              <Input
+                className="h-9 pl-9"
+                value={search}
+                maxLength={500}
+                disabled={busy}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="搜索会话…"
+                aria-label="搜索会话"
+              />
+            </div>
+            <FilterSelect
+              value={scope}
+              label="搜索范围"
+              disabled={busy}
+              onChange={(value) => {
+                setScope(value as SessionSearchScope)
+                resetFilter()
+              }}
+              options={[
+                ['all', '全部内容'],
+                ['title', '标题'],
+                ['content', '消息内容'],
+                ['id', '会话 ID']
+              ]}
+            />
+            <FilterSelect
+              value={project}
+              label="项目筛选"
+              disabled={busy}
+              onChange={(value) => {
+                setProject(value)
+                resetFilter()
+              }}
+              options={[
+                ['all', '所有项目'],
+                ...(data?.projects ?? []).map((item): [string, string] => [
+                  `project:${item.path}`,
+                  `${item.path || '未记录项目'}（${item.count}）`
+                ])
+              ]}
+              align="end"
+            />
+            <FilterSelect
+              value={period}
+              label="时间范围"
+              disabled={busy}
+              onChange={(value) => {
+                setPeriod(value)
+                resetFilter()
+              }}
+              options={[
+                ['all', '全部时间'],
+                ['1', '最近 24 小时'],
+                ['7', '最近 7 天'],
+                ['30', '最近 30 天']
+              ]}
+            />
+            <div className="flex items-center gap-1" aria-label="列表显示方式">
+              <Button
+                size="icon-sm"
+                variant={groupBy === 'project' ? 'secondary' : 'ghost'}
+                aria-label="按项目分组"
+                title="按项目分组"
+                aria-pressed={groupBy === 'project'}
+                disabled={busy}
+                onClick={() => {
+                  setGroupBy('project')
+                  setOffset(0)
+                }}
+              >
+                <Folder />
+              </Button>
+              <Button
+                size="icon-sm"
+                variant={groupBy === 'time' ? 'secondary' : 'ghost'}
+                aria-label="按时间排序"
+                title="按时间排序"
+                aria-pressed={groupBy === 'time'}
+                disabled={busy}
+                onClick={() => {
+                  setGroupBy('time')
+                  setOffset(0)
+                }}
+              >
+                <CalendarDays />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto h-7 px-1.5 text-xs text-muted-foreground"
+                disabled={
+                  busy || (!search && scope === 'all' && period === 'all' && project === 'all')
+                }
+                onClick={() => {
+                  setSearch('')
+                  setAppliedSearch('')
+                  setScope('all')
+                  setProject('all')
+                  setPeriod('all')
+                  resetFilter()
+                }}
+              >
+                重置筛选
+              </Button>
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
             <label className="flex cursor-pointer items-center gap-2 text-xs">
               <Checkbox
-                aria-label="选择本页会话"
+                aria-label="本页全选会话"
                 disabled={busy || selectingAll || loading || !sessions.length}
                 checked={
                   pageSelected
@@ -550,7 +577,7 @@ export function SessionsPage({
                   })
                 }
               />
-              {selected.size ? `已选 ${selected.size} 个` : '选择本页'}
+              {selected.size ? `已选 ${selected.size} 个` : '本页全选'}
             </label>
             <div className="flex items-center gap-1">
               <Button
@@ -567,7 +594,7 @@ export function SessionsPage({
                 onClick={() => void selectAllMatching()}
               >
                 {selectingAll && <Spinner />}
-                全选
+                全选结果
               </Button>
               {selected.size > 0 && (
                 <Button
@@ -577,7 +604,7 @@ export function SessionsPage({
                   disabled={busy || selectingAll}
                   onClick={() => setSelected(new Map())}
                 >
-                  清空
+                  取消选择
                 </Button>
               )}
               <Button
@@ -594,7 +621,7 @@ export function SessionsPage({
           <div className="min-h-0 flex-1 overflow-y-auto">
             {loading ? (
               <div
-                className="flex items-center justify-center gap-2 p-8 text-xs text-muted-foreground"
+                className="flex items-center justify-center gap-2 p-4 text-xs text-muted-foreground"
                 role="status"
               >
                 <Spinner />
@@ -616,10 +643,10 @@ export function SessionsPage({
                 </Button>
               </div>
             ) : !sessions.length ? (
-              <div className="space-y-2 px-5 py-10 text-center text-xs text-muted-foreground">
-                <ListFilter className="mx-auto mb-3 size-7 opacity-50" />
+              <div className="space-y-2 px-4 py-4 text-center text-xs text-muted-foreground">
+                <ListFilter className="mx-auto mb-2 hidden size-6 opacity-50 xl:block" />
                 <p>{data?.source.message || '没有符合条件的会话'}</p>
-                <p>可调整工具、项目、时间或搜索范围</p>
+                <p>试试重置筛选，或刷新以重新读取记录</p>
               </div>
             ) : (
               [...groups].map(([label, entries]) => (
@@ -640,8 +667,9 @@ export function SessionsPage({
                     <div
                       key={entry.key}
                       className={cn(
-                        'flex items-start gap-2 border-b px-3 py-3 transition-colors hover:bg-muted/40',
-                        active === entry.key && 'bg-muted/70 ring-1 ring-inset ring-border'
+                        'relative flex items-start gap-3 border-b border-border/60 px-3 py-4 transition-colors hover:bg-muted/40',
+                        active === entry.key &&
+                          'bg-primary/5 before:absolute before:inset-y-3 before:left-0 before:w-0.5 before:rounded-full before:bg-primary'
                       )}
                     >
                       <Checkbox
@@ -711,12 +739,14 @@ export function SessionsPage({
           onBack={() => {
             activeKey.current = null
             setActive(null)
+            setDetailLoading(false)
+            setDetailError(null)
             setDetail(null)
           }}
           detail={detail}
           search={appliedSearch}
-          loading={detailLoading}
-          error={detailError}
+          loading={active !== null && detailLoading}
+          error={active !== null ? detailError : null}
           busy={busy || selectingAll}
           onLoadPrevious={() => {
             if (detail)
@@ -743,7 +773,7 @@ export function SessionsPage({
       <div
         className={cn(
           'shrink-0 space-y-1 text-[11px] text-muted-foreground',
-          active && 'hidden md:block'
+          active && 'hidden lg:block'
         )}
       >
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -757,8 +787,6 @@ export function SessionsPage({
               : data?.source.directory) || SESSION_SOURCE_NAMES[sourceId]}
           </span>
         </div>
-        {tool === 'copilot-cli' && <p>此处管理 Copilot CLI 本地会话。</p>}
-        {tool === 'copilot-vscode' && <p>此处读取 VS Code 的本地 Copilot Chat 会话历史。</p>}
         {(Boolean(data?.warnings.length) ||
           Boolean(deleteResult?.failures.length) ||
           Boolean(deleteResult?.warnings.length)) && (
@@ -793,58 +821,15 @@ export function SessionsPage({
           </details>
         )}
       </div>
-      <Dialog
-        open={preview !== null}
-        onOpenChange={(open) => {
-          if (!open && !busy) {
-            setPreview(null)
-            setDeleteError(null)
-          }
-        }}
-      >
-        <DialogContent className="flex max-h-[85svh] flex-col sm:max-w-xl" showCloseButton={!busy}>
-          <DialogHeader>
-            <DialogTitle>永久删除 {preview?.sessions.length ?? 0} 个完整会话？</DialogTitle>
-            <DialogDescription>
-              包含会话中的全部提问、回答及对应的本地工具记录。删除后无法通过本应用恢复。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="min-h-0 space-y-3 overflow-y-auto">
-            <div className="max-h-64 divide-y overflow-y-auto rounded-lg border">
-              {preview?.sessions.map((entry) => (
-                <div key={entry.key} className="space-y-1 p-3">
-                  <p className="text-sm font-medium break-words">{entry.title}</p>
-                  <p className="text-[11px] text-muted-foreground">
-                    {SESSION_SOURCE_NAMES[entry.sourceId]} · {entry.project || '未记录项目'}
-                  </p>
-                  <p className="font-mono text-[10px] break-all text-muted-foreground">
-                    {entry.sessionId}
-                  </p>
-                </div>
-              ))}
-            </div>
-            {preview?.notes.map((note) => (
-              <p key={note} className="text-xs leading-5 text-muted-foreground">
-                {note}
-              </p>
-            ))}
-            {deleteError && (
-              <Alert variant="destructive">
-                <AlertDescription>{deleteError}</AlertDescription>
-              </Alert>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" disabled={busy} onClick={() => setPreview(null)}>
-              取消
-            </Button>
-            <Button variant="destructive" disabled={busy} onClick={() => void confirmDelete()}>
-              {busy ? <Spinner /> : <Trash2 />}
-              {busy ? '正在删除…' : '确认永久删除'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {preview && (
+        <SessionDeleteDialog
+          key={preview.token}
+          preview={preview}
+          busy={busy}
+          onClose={() => setPreview(null)}
+          onConfirm={() => void confirmDelete()}
+        />
+      )}
     </div>
   )
 }
@@ -866,9 +851,8 @@ function FilterSelect({
 }): React.JSX.Element {
   return (
     <Select value={value} onValueChange={onChange} disabled={disabled}>
-      <SelectTrigger aria-label={label} className="h-9 max-w-52">
+      <SelectTrigger aria-label={label} className="h-8 w-full min-w-0 text-xs">
         <SelectValue placeholder={label} />
-        <ChevronDown className="hidden" />
       </SelectTrigger>
       <SelectContent align={align} sideOffset={8} className="max-h-64 max-w-[min(42rem,90vw)]">
         {options.map(([id, name]) => (

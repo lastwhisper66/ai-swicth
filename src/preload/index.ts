@@ -23,6 +23,7 @@ const api: DesktopApi = {
     read: (input) => ipcRenderer.invoke(SESSION_CHANNELS.read, input),
     selectAll: (input) => ipcRenderer.invoke(SESSION_CHANNELS.selectAll, input),
     previewDelete: (input) => ipcRenderer.invoke(SESSION_CHANNELS.previewDelete, input),
+    previewClear: (input) => ipcRenderer.invoke(SESSION_CHANNELS.previewClear, input),
     delete: (input) => ipcRenderer.invoke(SESSION_CHANNELS.delete, input)
   },
   copilot: {

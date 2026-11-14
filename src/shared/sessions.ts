@@ -46,6 +46,8 @@ export interface SessionMessage {
   text: string
   timestamp?: string
   label?: string
+  kind?: 'tool-call' | 'tool-result' | 'activity' | 'context'
+  toolCallId?: string
 }
 
 export interface SessionDetail {
@@ -85,6 +87,7 @@ export interface SessionDeleteItem {
 
 export interface SessionDeletePreview {
   token: string
+  clearSource?: SessionSourceId
   sessions: SessionSummary[]
   notes: string[]
 }
@@ -100,6 +103,7 @@ export const SESSION_CHANNELS = {
   read: 'sessions:read',
   selectAll: 'sessions:select-all',
   previewDelete: 'sessions:preview-delete',
+  previewClear: 'sessions:preview-clear',
   delete: 'sessions:delete'
 } as const
 
@@ -114,5 +118,6 @@ export interface SessionsApi {
   previewDelete: (input: {
     sessions: SessionDeleteItem[]
   }) => Promise<ApiResult<SessionDeletePreview>>
+  previewClear: (input: { sourceId: SessionSourceId }) => Promise<ApiResult<SessionDeletePreview>>
   delete: (input: { token: string }) => Promise<ApiResult<SessionDeleteResult>>
 }

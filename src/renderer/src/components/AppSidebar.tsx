@@ -1,14 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { TOOL_NAMES, type ApplicationPreferences, type ToolId } from '@shared/ipc'
 import { APPLICATION_INSTANCES, type ApplicationId } from '@shared/applications'
-import {
-  AppWindow,
-  BarChart3,
-  MessageSquareText,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Settings
-} from 'lucide-react'
+import { AppWindow, BarChart3, PanelLeftClose, PanelLeftOpen, Settings } from 'lucide-react'
 import { AppIcon } from '@renderer/components/AppIcon'
 import { ToolIcon } from '@renderer/components/ToolIcon'
 import { SortableList, type SortableHandleProps } from '@renderer/components/SortableList'
@@ -18,16 +11,14 @@ import { cn } from '@renderer/lib/utils'
 import { moveItem } from '@renderer/lib/sort-order'
 
 interface AppSidebarProps {
-  view: ToolId | 'settings' | 'applications' | 'copilot' | 'sessions' | 'usage'
+  view: ToolId | 'settings' | 'applications' | 'copilot' | 'usage'
   preferences: ApplicationPreferences
   ready: boolean
   busy: boolean
   collapseSaving: boolean
   onCollapsedChange: (collapsed: boolean) => void
   onOrderChange: (order: ApplicationId[]) => Promise<boolean>
-  onViewChange: (
-    view: ToolId | 'settings' | 'applications' | 'copilot' | 'sessions' | 'usage'
-  ) => void
+  onViewChange: (view: ToolId | 'settings' | 'applications' | 'copilot' | 'usage') => void
 }
 
 export function AppSidebar({
@@ -231,13 +222,6 @@ export function AppSidebar({
             'usage',
             '用量统计',
             <BarChart3 className="size-5" aria-hidden="true" />
-          )}
-        </div>
-        <div className={cn('flex', collapsed && 'justify-center')}>
-          {navigationButton(
-            'sessions',
-            '会话',
-            <MessageSquareText className="size-5" aria-hidden="true" />
           )}
         </div>
         <div className={cn('flex', collapsed && 'justify-center')}>
