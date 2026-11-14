@@ -9,6 +9,24 @@ type CopilotClientConfiguration = Pick<CopilotConfiguration, 'name' | 'vendor' |
   [key: string]: unknown
 }
 
+/** VS Code sorts custom provider groups by name, independently of their JSON array order. */
+export function copilotClientName(name: string, position: number, count: number): string {
+  return `${String(position + 1).padStart(Math.max(2, String(count).length), '0')}-${name}`
+}
+
+/** Strip only a recognized client prefix; an original name can itself start with digits. */
+export function copilotProviderName(
+  name: string,
+  providerNames: ReadonlySet<string>,
+  appliedNames: ReadonlyMap<string, string>
+): string {
+  const original = appliedNames.get(name)
+  if (original !== undefined) return original
+  if (providerNames.has(name)) return name
+  const unprefixed = name.replace(/^\d{2,}-/u, '')
+  return providerNames.has(unprefixed) ? unprefixed : name
+}
+
 const AUTH_HEADERS = new Set(['authorization', 'api-key', 'x-api-key', 'x-goog-api-key', 'apikey'])
 const MODEL_FIELD_ORDER = [
   'id',
@@ -37,13 +55,15 @@ function orderCopilotModelFields(model: CopilotModel): CopilotModel {
 
 /** VS Code resolves top-level apiKey exclusively through its own Secret Storage. */
 export function buildCopilotClientConfiguration(
-  configuration: CopilotConfiguration
+  configuration: CopilotConfiguration,
+  name = configuration.name
 ): CopilotClientConfiguration {
   const { apiKey, ...group } = structuredClone(configuration)
   const secretReference = /^\$\{input:[^{}]+\}$/u.test(apiKey)
 
   return {
     ...group,
+    name,
     ...(secretReference ? { apiKey } : {}),
     models: group.models.map((model) => {
       if (secretReference) return orderCopilotModelFields(model)
@@ -93,7 +113,7 @@ export function parseCopilotDocument(content: string | null): unknown[] {
 
 export function copilotGroupIndex(groups: unknown[], name: string): number {
   const matches = groups.flatMap((group, index) =>
-    isObject(group) && group.name === name ? [index] : []
+    isObject(group) && group.vendor === 'customendpoint' && group.name === name ? [index] : []
   )
   if (matches.length > 1)
     throw new AppError(
@@ -101,6 +121,25 @@ export function copilotGroupIndex(groups: unknown[], name: string): number {
       'VS Code 中存在同名模型分组，请先重命名重复分组。'
     )
   return matches[0] ?? -1
+}
+
+/** Renumber an unchanged managed group without rewriting models, credentials or comments. */
+export function renameCopilotGroup(content: string, index: number, name: string): string {
+  const result = applyEdits(content, modify(content, [index, 'name'], name, editOptions(content)))
+  parseCopilotDocument(result)
+  return result
+}
+
+function editOptions(content: string): {
+  formattingOptions: { insertSpaces: boolean; tabSize: number; eol: string }
+} {
+  return {
+    formattingOptions: {
+      insertSpaces: true,
+      tabSize: 2,
+      eol: content.includes('\r\n') ? '\r\n' : '\n'
+    }
+  }
 }
 
 /** Replace unowned groups; update managed properties while preserving unrelated JSONC. */
@@ -111,13 +150,7 @@ export function updateCopilotGroup(
   previous?: CopilotClientConfiguration
 ): string {
   let result = content ?? '[]\n'
-  const options = {
-    formattingOptions: {
-      insertSpaces: true,
-      tabSize: 2,
-      eol: result.includes('\r\n') ? '\r\n' : '\n'
-    }
-  }
+  const options = editOptions(result)
   const edit = (path: (string | number)[], value: unknown): void => {
     result = applyEdits(result, modify(result, path, value, options))
   }

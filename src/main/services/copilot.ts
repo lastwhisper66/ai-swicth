@@ -8,13 +8,17 @@ import type {
   CopilotBackupSummary,
   CopilotApplyInput,
   CopilotConfiguration,
+  CopilotProvider,
   CopilotSnapshot
 } from '@shared/copilot'
 import { CopilotProviderStore } from '../providers/copilot'
 import {
   buildCopilotClientConfiguration,
+  copilotClientName,
   copilotGroupIndex,
+  copilotProviderName,
   parseCopilotDocument,
+  renameCopilotGroup,
   updateCopilotGroup
 } from '../adapters/copilot'
 import type { AppDatabase } from '../database'
@@ -26,6 +30,7 @@ import { redactCleanupValue } from '../utils/cleanup-preview'
 import type { ProviderCleanupPreview } from '@shared/provider-cleanup'
 
 interface OwnedGroup {
+  // The application name stays unprefixed; applied.name is the exact name written to VS Code.
   desired: CopilotConfiguration
   applied: Record<string, unknown>
 }
@@ -136,19 +141,22 @@ export class CopilotService {
       message = mapped.message
     }
     const managed = this.managed(path)
+    const providers = this.providers.list()
+    const readName = groupNameReader(providers, managed)
     return {
       path,
       customPath: this.database.getSetting('device_settings', 'copilot.path') !== null,
       fileState,
       message,
       revision: this.revision(path, original),
-      providers: this.providers.list().map((provider) => {
+      providers: providers.map((provider, position) => {
         const config = provider.configuration
-        const clientConfig = buildCopilotClientConfiguration(config)
-        const owned = managed[provider.id]
-        const matches = groups.filter(
-          (g) => isObject(g) && g.name === (owned?.desired.name ?? config.name)
+        const clientConfig = buildCopilotClientConfiguration(
+          config,
+          copilotClientName(config.name, position, providers.length)
         )
+        const owned = managed[provider.id]
+        const matches = groups.filter((g) => readName(g) === (owned?.desired.name ?? config.name))
         const syncState =
           fileState === 'invalid' || fileState === 'unreadable' || matches.length > 1
             ? 'external'
@@ -199,7 +207,7 @@ export class CopilotService {
     await this.write(plan.path, plan.original, plan.next, plan.managed, 'sync', {
       revision: input.revision
     })
-    return `已应用 ${input.providerIds.length} 个供应商。请在 VS Code 中选择模型；未出现时重启 VS Code。`
+    return `已应用 ${input.providerIds.length} 个供应商，并同步已管理分组的排序编号。请在 VS Code 中选择模型；顺序未更新时执行“开发人员: 重新加载窗口”。`
   }
 
   async deleteProvider(id: string, revision: string): Promise<string> {
@@ -242,13 +250,18 @@ export class CopilotService {
   private async planDisable(path: string, providerIds: string[]): Promise<CopilotFileChange> {
     const original = await this.targets.read(path)
     const managed = this.managed(path)
+    const readName = groupNameReader(this.providers.list(), managed)
     let next = original
     parseCopilotDocument(original)
     for (const id of providerIds) {
       const owned = managed[id]
       if (!owned) continue
-      const index = copilotGroupIndex(parseCopilotDocument(next), owned.desired.name)
-      if (index >= 0 && !isDeepStrictEqual(parseCopilotDocument(next)[index], owned.applied))
+      const groups = parseCopilotDocument(next)
+      const matching = groups.flatMap((group, index) =>
+        readName(group) === owned.desired.name ? [index] : []
+      )
+      const index = matching[0] ?? -1
+      if (matching.length > 1 || (index >= 0 && !isDeepStrictEqual(groups[index], owned.applied)))
         throw new AppError(
           'CONCURRENT_MODIFICATION',
           '供应商分组已在 VS Code 中修改，未移除。请先在对应配置路径中处理该分组，再刷新重试。'
@@ -315,6 +328,7 @@ export class CopilotService {
     const providers = this.providers.list()
     const activeIds = new Set(providers.map((provider) => provider.id))
     const previous = this.managed(path)
+    const readName = groupNameReader(providers, previous)
     const managed: ManagedGroups = Object.fromEntries(
       Object.entries(previous).filter(([id]) => activeIds.has(id))
     )
@@ -329,9 +343,7 @@ export class CopilotService {
           owned.desired.name === config.name &&
           owned.desired.vendor === config.vendor
       )
-      const matches = groups.filter(
-        (group) => isObject(group) && group.name === config.name && group.vendor === config.vendor
-      )
+      const matches = groups.filter((group) => readName(group) === config.name)
       if (
         candidates.length === 1 &&
         matches.length === 1 &&
@@ -346,10 +358,10 @@ export class CopilotService {
         ...(managed[provider.id] ? [managed[provider.id].desired.name] : [])
       ])
     )
-    const retained = groups.map(
-      (group) =>
-        isObject(group) && group.vendor === 'customendpoint' && names.has(group.name as string)
-    )
+    const retained = groups.map((group) => {
+      const name = readName(group)
+      return name !== undefined && names.has(name)
+    })
     const count = retained.filter((keep) => !keep).length
     let next = original
     // Remove from the end so array offsets remain valid and retained groups keep their JSONC.
@@ -387,13 +399,20 @@ export class CopilotService {
     let next = original ?? '[]\n'
     parseCopilotDocument(original)
     const managed = this.managed(path)
-    for (const id of providerIds) {
-      const config = this.providers.get(id).configuration
-      const clientConfig = buildCopilotClientConfiguration(config)
+    const providers = this.providers.list()
+    const selected = new Set(providerIds)
+    for (const [position, provider] of providers.entries()) {
+      const { id, configuration: config } = provider
+      if (!selected.has(id)) continue
+      const clientConfig = buildCopilotClientConfiguration(
+        config,
+        copilotClientName(config.name, position, providers.length)
+      )
       const owned = managed[id]
       const groups = parseCopilotDocument(next)
+      const readName = groupNameReader(providers, managed)
       const matching = groups.flatMap((group, index) =>
-        isObject(group) && group.name === config.name ? [index] : []
+        readName(group) === config.name ? [index] : []
       )
       const previous = groups.flatMap((group, index) =>
         owned && isDeepStrictEqual(group, owned.applied) ? [index] : []
@@ -419,7 +438,7 @@ export class CopilotService {
       for (const [otherId, group] of Object.entries(managed))
         if (otherId !== id && group.desired.name === config.name) delete managed[otherId]
       const written = parseCopilotDocument(next)
-      const applied = written[copilotGroupIndex(written, config.name)]
+      const applied = written[copilotGroupIndex(written, clientConfig.name)]
       if (!isObject(applied)) throw new AppError('WRITE_FAILED', 'Copilot 配置生成校验失败。')
       for (const [key, value] of Object.entries(clientConfig))
         if (!isDeepStrictEqual(applied[key], value))
@@ -427,6 +446,43 @@ export class CopilotService {
       if (applied.apiKey !== clientConfig.apiKey)
         throw new AppError('WRITE_FAILED', 'Copilot 凭据配置校验失败。')
       managed[id] = { desired: config, applied }
+    }
+    // Only synchronize names of other applied providers, never their unapplied edits.
+    for (const [position, provider] of providers.entries()) {
+      const owned = managed[provider.id]
+      if (!owned || selected.has(provider.id)) continue
+      const name = copilotClientName(owned.desired.name, position, providers.length)
+      if (name === owned.applied.name) continue
+      const groups = parseCopilotDocument(next)
+      const readName = groupNameReader(providers, managed)
+      const matching = groups.flatMap((group, index) =>
+        readName(group) === owned.desired.name ? [index] : []
+      )
+      if (!matching.length) continue
+      const index = matching[0]
+      if (matching.length > 1 || !isDeepStrictEqual(groups[index], owned.applied))
+        throw new AppError(
+          'CONCURRENT_MODIFICATION',
+          '需要更新排序编号的供应商分组已在 VS Code 中修改。请将该供应商一并选中应用，或先恢复其配置后重试。'
+        )
+      if (
+        groups.some(
+          (group, candidate) =>
+            isObject(group) &&
+            candidate !== index &&
+            group.vendor === 'customendpoint' &&
+            group.name === name
+        )
+      )
+        throw new AppError(
+          'CONCURRENT_MODIFICATION',
+          '排序编号与现有供应商分组重名，请先在 VS Code 中重命名冲突分组后重试。'
+        )
+      next = renameCopilotGroup(next, index, name)
+      const applied = parseCopilotDocument(next)[index]
+      if (!isObject(applied) || !isDeepStrictEqual(applied, { ...owned.applied, name }))
+        throw new AppError('WRITE_FAILED', 'Copilot 排序编号校验失败，原文件未修改。')
+      managed[provider.id] = { ...owned, applied }
     }
     return { path, original, next, managed, revision: this.revision(path, original) }
   }
@@ -556,6 +612,23 @@ export class CopilotService {
     if (this.revision(path, original) !== revision)
       throw new AppError('CONCURRENT_MODIFICATION', '配置或供应商已改变，请刷新页面后重试。')
   }
+}
+
+function groupNameReader(
+  providers: CopilotProvider[],
+  managed: ManagedGroups
+): (group: unknown) => string | undefined {
+  const names = new Set(providers.map((provider) => provider.configuration.name))
+  const appliedNames = new Map<string, string>()
+  for (const owned of Object.values(managed)) {
+    names.add(owned.desired.name)
+    if (typeof owned.applied.name === 'string')
+      appliedNames.set(owned.applied.name, owned.desired.name)
+  }
+  return (group) =>
+    isObject(group) && group.vendor === 'customendpoint' && typeof group.name === 'string'
+      ? copilotProviderName(group.name, names, appliedNames)
+      : undefined
 }
 
 function defaultCopilotPath(): string {

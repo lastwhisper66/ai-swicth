@@ -8,6 +8,8 @@
 
 `buildCopilotClientConfiguration` 将应用内凭据映射为客户端配置。VS Code 1.145 / Copilot 0.73 的顶层 `apiKey` 声明为 secret，主程序只通过 Secret Storage 解析该字段，明文值不会传给扩展。已有 `${input:...}` 引用原样保留；明文或空 Key 不写顶层字段，明文 Key 按模型实际协议生成 `x-api-key`、Azure `api-key` 或 Bearer 认证头。自定义认证头优先，明文 Key 在应用时展开 `${apiKey}`，空 Key 不生成默认认证头。应用内配置保持原样，客户端生成值由主进程写入，预览和列表继续脱敏。
 
+已核对本机 VS Code 1.146.0：模型管理页以 `group.label.localeCompare` 排序自定义分组，配置服务按 `vendor:name` 比较分组，仅调整 JSON 数组顺序不会触发分组内容变化。`copilotClientName` 按完整供应商列表位置生成至少两位、宽度一致的数字前缀，`copilotProviderName` 优先通过写入记录还原原名，再兼容已知名称的单层前缀；已保存的数字开头原名不会被无条件截断。解析保留磁盘原始名称供并发校验与备份使用，只有身份匹配还原名称。`renameCopilotGroup` 仅编辑 JSONC 的分组 `name`，不会重写其他字段。模型 ID、模型名称及 `vendor` 不加前缀。
+
 `configuration-policy.ts` 统一运行时合法值校验；模型能力、字段归属与表单定义位于 `src/shared/configuration.ts`。适配器组合连接、模型预设和共通草稿，生成原生字段并读回校验。JSON/TOML 按叶子合并，未知字段保留；TOML 会重新排版并丢弃注释，原文留在写前备份中。
 
 字段写入不代表模型、账号或网关实际可用，不调用付费 API 探测。

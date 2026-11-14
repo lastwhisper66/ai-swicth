@@ -325,7 +325,10 @@ export function CopilotProviderForm({
                   <h2 className="text-sm font-semibold">连接信息</h2>
                 </div>
                 <div className="grid gap-x-5 gap-y-4 p-5 @lg:grid-cols-2">
-                  <CopilotField label="供应商名称" hint="对应 VS Code 模型选择器中的分组名称。">
+                  <CopilotField
+                    label="供应商名称"
+                    hint="应用内保留原名；写入 VS Code 时自动添加 01-、02- 等排序编号，无需手动填写。"
+                  >
                     {(id) => (
                       <Input
                         id={id}

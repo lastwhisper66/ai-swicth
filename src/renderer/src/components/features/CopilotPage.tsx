@@ -318,7 +318,8 @@ export function CopilotPage({
               {snapshot && <Badge variant="secondary">{snapshot.providers.length}</Badge>}
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              点击“应用”将供应商及模型写入 VS Code，再在聊天中选择模型；可拖动手柄调整供应商顺序。
+              拖动手柄调整供应商顺序，点击“应用”后同步到 VS Code；分组名称自动添加 01-、02-
+              等排序编号，应用内仍显示原名。
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
